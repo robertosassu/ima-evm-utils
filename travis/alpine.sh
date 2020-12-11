@@ -42,7 +42,10 @@ apk add \
 	sudo \
 	wget \
 	which \
-	xxd
+	xxd \
+	acl \
+	e2fsprogs \
+	epoch
 
 if [ ! "$TSS" ]; then
 	apk add git

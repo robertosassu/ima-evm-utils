@@ -49,6 +49,9 @@ $apt \
 	sudo \
 	wget \
 	xsltproc \
+	acl \
+	e2fsprogs \
+	keyutils
 
 $apt xxd || $apt vim-common
 $apt libengine-gost-openssl1.1$ARCH || true

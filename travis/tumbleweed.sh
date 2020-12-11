@@ -40,7 +40,11 @@ zypper --non-interactive install --force-resolution --no-recommends \
 	vim \
 	wget \
 	which \
-	xsltproc
+	xsltproc \
+	e2fsprogs \
+	keyutils \
+	systemd-sysvinit \
+	acl
 
 if [ -f /usr/lib/ibmtss/tpm_server ]; then
 	ln -s /usr/lib/ibmtss/tpm_server /usr/local/bin

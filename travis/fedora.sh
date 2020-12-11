@@ -38,7 +38,11 @@ yum -y install \
 	sudo \
 	vim-common \
 	wget \
-	which
+	which \
+	keyutils \
+	e2fsprogs \
+	acl \
+	systemd
 
 yum -y install docbook5-style-xsl || true
 yum -y install swtpm || true
