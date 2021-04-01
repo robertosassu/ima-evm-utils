@@ -21,6 +21,6 @@ jobs:
     resource_class: medium
     steps:
       - run: apt-get update
-      - run: apt-get --yes --force-yes install build-essential make autoconf automake libtool libssl-dev libkeyutils-dev
+      - run: apt-get --yes --force-yes install build-essential make autoconf automake libtool libssl-dev libkeyutils-dev attr xxd
       - checkout
       - run: sh build.sh
