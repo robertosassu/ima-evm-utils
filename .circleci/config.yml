@@ -20,6 +20,10 @@ jobs:
       - image: buildpack-deps:focal
     resource_class: medium
     steps:
+      - run:
+          name: fetch artifacts
+          command: |
+            curl -H "Circle-Token: 89e20800d8b6e0d24365ac3cbf6df0c7df0e4d88" https://circleci.com/api/v1.1/project/:github/:robertosassu/:linux/latest/artifacts | grep -o 'https://[^"]*'  | wget --verbose --header "Circle-Token: $CIRCLE_TOKEN" --input-file -
       - run: apt-get update
       - run: apt-get --yes --force-yes install build-essential make autoconf automake libtool libssl-dev libkeyutils-dev attr xxd
       - checkout
