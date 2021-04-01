@@ -1,0 +1,338 @@
+#!/bin/bash
+
+#
+# Check if the new appraisal requirement meta_immutable is correctly handled.
+
+trap cleanup SIGINT SIGTERM SIGSEGV EXIT
+
+# Base VERBOSE on the environment variable, if set.
+VERBOSE="${VERBOSE:-0}"
+TST_EVM_CHANGE_MODE="${TST_EVM_CHANGE_MODE:-0}"
+
+# From security/integrity/evm/evm.h in kernel source directory
+let "EVM_INIT_HMAC=0x0001"
+let "EVM_INIT_X509=0x0002"
+let "EVM_ALLOW_METADATA_WRITES=0x0004"
+let "EVM_SETUP_COMPLETE=-0x80000000"
+
+cd "$(dirname "$0")"
+export PATH=$PWD/../src:$PATH
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH
+. ./functions.sh
+_require evmctl
+
+cleanup() {
+	if [ "$loop_mounted" = "1" ]; then
+		popd > /dev/null
+		umount $mountpoint
+	fi
+
+	if [ -n "$dev" ]; then
+		losetup -d $dev
+	fi
+
+	rm -f $image
+	rm -f $key_path_der
+	rm -Rf $mountpoint
+	_cleanup_user_mode
+	_report_exit
+}
+
+IMA_UUID="28b23254-9467-44c0-b6ba-34b12e85a26f"
+APPRAISE_DIGSIG_FOWNER=2000
+APPRAISE_DIGSIG_RULE="appraise fsuuid=$IMA_UUID fowner=$APPRAISE_DIGSIG_FOWNER appraise_type=imasig"
+APPRAISE_DIGSIG_IMMUTABLE_FOWNER=2001
+APPRAISE_DIGSIG_IMMUTABLE_RULE="appraise fsuuid=$IMA_UUID fowner=$APPRAISE_DIGSIG_IMMUTABLE_FOWNER appraise_type=imasig appraise_type=meta_immutable"
+
+check_load_ima_rule() {
+	rule_loaded=$(cat /sys/kernel/security/ima/policy | grep "$1")
+	if [ -z "$rule_loaded" ]; then
+		new_policy=$(mktemp -p $mountpoint)
+		echo $1 > $new_policy
+		evmctl sign -o -a sha256 --imasig --key $key_path $new_policy &> /dev/null
+		echo $new_policy > /sys/kernel/security/ima/policy
+		result=$?
+		rm -f $new_policy
+
+		if [ $result -ne 0 ]; then
+			echo "${RED}Failed to set IMA policy${NORM}"
+			return $FAIL
+		fi
+	fi
+
+	return $OK
+}
+
+# The purpose of this test is to verify that the patch 'ima: Add meta_immutable
+# appraisal type' does not break the existing behavior. If the
+# appraise_type=imasig is specified, files with either non-immutable or
+# immutable signatures should be appraised successfully.
+check_ima_check_imasig() {
+	echo "Test: ${FUNCNAME[0]} (evm_value: $evm_value)"
+
+	dd if=/dev/urandom of=test-file bs=128 count=1 &> /dev/null
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot write test-file${NORM}"
+		return $FAIL
+	fi
+
+	generation=$(evmctl sign -a sha256 -v -n --key $key_path test-file 2>&1 | awk '$1 == "generation:" {print $2}')
+	if [ -z "$generation" ]; then
+		echo "${RED}Cannot get generation number of test-file${NORM}"
+		return $FAIL
+	fi
+
+	evmctl ima_sign -a sha256 --key $key_path test-file &> /dev/null
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot sign test-file${NORM}"
+		return $FAIL
+	fi
+
+	chown $APPRAISE_DIGSIG_FOWNER test-file
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot change owner of test-file${NORM}"
+		return $FAIL
+	fi
+
+	evmctl sign -a sha256 --uuid=$IMA_UUID --generation $generation --key $key_path test-file &> /dev/null
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot sign test-file${NORM}"
+		return $FAIL
+	fi
+
+	check_load_ima_rule "$APPRAISE_DIGSIG_RULE"
+	result=$?
+	if [ $result -ne $OK ]; then
+		return $result
+	fi
+
+	cat test-file &> /dev/null
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot read test-file${NORM}"
+		return $FAIL
+	fi
+
+	dd if=/dev/urandom of=test-file-immutable bs=128 count=1 &> /dev/null
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot write test-file${NORM}"
+		return $FAIL
+	fi
+
+	evmctl sign -o -a sha256 --imasig --uid $APPRAISE_DIGSIG_FOWNER --key $key_path test-file-immutable &> /dev/null
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot sign test-file-immutable${NORM}"
+		return $FAIL
+	fi
+
+	chown $APPRAISE_DIGSIG_FOWNER test-file-immutable
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot change owner of test-file-immutable${NORM}"
+		return $FAIL
+	fi
+
+	cat test-file-immutable &> /dev/null
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot read test-file-immutable${NORM}"
+		return $FAIL
+	fi
+}
+
+cleanup_ima_check_imasig() {
+	rm -f test-file test-file-immutable
+}
+
+# Requires:
+# - ima: Add meta_immutable appraisal type
+#
+# The purpose of this test is to verify that the additional requirement
+# appraise_type=meta_immutable is considered. Files with immutable signature
+# should be appraised successfully, files with non-immutable signature should
+# not be accessible.
+check_ima_check_imasig_meta_immutable() {
+	echo "Test: ${FUNCNAME[0]} (evm_value: $evm_value)"
+
+	dd if=/dev/urandom of=test-file bs=128 count=1 &> /dev/null
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot write test-file${NORM}"
+		return $FAIL
+	fi
+
+	generation=$(evmctl sign -a sha256 -v -n --key $key_path test-file 2>&1 | awk '$1 == "generation:" {print $2}')
+	if [ -z "$generation" ]; then
+		echo "${RED}Cannot get generation number of test-file${NORM}"
+		return $FAIL
+	fi
+
+	evmctl ima_sign -a sha256 --key $key_path test-file &> /dev/null
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot sign test-file${NORM}"
+		return $FAIL
+	fi
+
+	chown $APPRAISE_DIGSIG_IMMUTABLE_FOWNER test-file
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot change owner of test-file${NORM}"
+		return $FAIL
+	fi
+
+	evmctl sign -a sha256 --uuid=$IMA_UUID --generation $generation --key $key_path test-file &> /dev/null
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot sign test-file${NORM}"
+		return $FAIL
+	fi
+
+	check_load_ima_rule "$APPRAISE_DIGSIG_IMMUTABLE_RULE"
+	result=$?
+	if [ $result -ne $OK ]; then
+		return $result
+	fi
+
+	# Check that meta_immutable is correctly displayed in the IMA policy.
+	rule_loaded=$(cat /sys/kernel/security/ima/policy | grep "$APPRAISE_DIGSIG_IMMUTABLE_RULE")
+	if [ -z "$rule_loaded" ]; then
+		echo "${RED}Rule \"$APPRAISE_DIGSIG_IMMUTABLE_RULE\" not found${NORM}"
+		return $FAIL
+	fi
+
+	cat test-file &> /dev/null
+	if [ $? -eq 0 ]; then
+		echo "${RED}Read of test-file succeeded, not expected${NORM}"
+		return $FAIL
+	fi
+
+	dd if=/dev/urandom of=test-file-immutable bs=128 count=1 &> /dev/null
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot write test-file${NORM}"
+		return $FAIL
+	fi
+
+	evmctl sign -o -a sha256 --imasig --uid $APPRAISE_DIGSIG_IMMUTABLE_FOWNER --key $key_path test-file-immutable &> /dev/null
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot sign test-file-immutable${NORM}"
+		return $FAIL
+	fi
+
+	chown $APPRAISE_DIGSIG_IMMUTABLE_FOWNER test-file-immutable
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot change owner of test-file-immutable${NORM}"
+		return $FAIL
+	fi
+
+	cat test-file-immutable &> /dev/null
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot read test-file-immutable${NORM}"
+		return $FAIL
+	fi
+}
+
+cleanup_ima_check_imasig_meta_immutable() {
+	rm -f test-file test-file-immutable
+}
+
+# Run in User Mode Linux.
+_run_user_mode ../linux $PWD/$(basename $0) "PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH VERBOSE=$VERBOSE TST_EVM_CHANGE_MODE=$TST_EVM_CHANGE_MODE TST_KEY_PATH=$TST_KEY_PATH"
+
+# Exit from the parent if UML was used.
+_exit_user_mode ../linux
+
+# Mount filesystems in UML environment.
+_init_user_mode
+
+mountpoint=$(mktemp -d)
+image=$(mktemp)
+
+if [ -z "$mountpoint" ]; then
+	echo "${RED}Mountpoint directory not created${NORM}"
+	exit $FAIL
+fi
+
+if [ $(whoami) != "root" ]; then
+	echo "${CYAN}This script must be executed as root${NORM}"
+	exit $SKIP
+fi
+
+key_path="/lib/modules/$(uname -r)/source/certs/signing_key.pem"
+if [ -n "$TST_KEY_PATH" ]; then
+	key_path=$TST_KEY_PATH
+fi
+
+if [ ${key_path:0:1} != "/" ]; then
+	echo "${RED}Absolute path required for the signing key${NORM}"
+	exit $FAIL
+fi
+
+key_path_der=$(mktemp)
+
+if [ ! -f $key_path ]; then
+	echo "${CYAN}Kernel signing key not found in $key_path${NORM}"
+	exit $SKIP
+fi
+
+if [ ! -f "/sys/kernel/security/evm" ]; then
+	echo "${CYAN}EVM support in the kernel disabled${NORM}"
+	exit $SKIP
+fi
+
+evm_value=$(cat /sys/kernel/security/evm)
+
+openssl x509 -in $key_path --out $key_path_der -outform der
+
+cat $key_path_der | keyctl padd asymmetric pubkey %keyring:.ima &> /dev/null
+if [ $? -ne 0 ]; then
+	echo "${RED}Public key cannot be added to the IMA keyring${NORM}"
+	exit $FAIL
+fi
+
+cat $key_path_der | keyctl padd asymmetric pubkey %keyring:.evm &> /dev/null
+if [ $? -ne 0 ]; then
+	echo "${RED}Public key cannot be added to the EVM keyring${NORM}"
+	exit $FAIL
+fi
+
+
+if [ $((evm_value & EVM_INIT_X509)) -ne $EVM_INIT_X509 ]; then
+	if [ "$TST_EVM_CHANGE_MODE" -ne 1 ]; then
+		echo "${RED}TST_EVM_CHANGE_MODE env variable not set to 1, cannot change EVM mode (current: $evm_value)${NORM}"
+		exit $FAIL
+	fi
+
+	echo $EVM_INIT_X509 > /sys/kernel/security/evm 2> /dev/null
+	evm_value=$(cat /sys/kernel/security/evm)
+fi
+
+# We cannot determine from securityfs if EVM_SETUP_COMPLETE is set, so we set it unless EVM_ALLOW_METADATA_WRITES is set.
+if [ $((evm_value & EVM_ALLOW_METADATA_WRITES)) -ne $EVM_ALLOW_METADATA_WRITES ] && [ "$TST_EVM_CHANGE_MODE" -eq 1 ]; then
+	echo $EVM_SETUP_COMPLETE > /sys/kernel/security/evm 2> /dev/null
+fi
+
+dd if=/dev/zero of=$image bs=1M count=10 &> /dev/null
+if [ $? -ne 0 ]; then
+	echo "${RED}Cannot create test image${NORM}"
+	exit $FAIL
+fi
+
+dev=$(losetup -f $image --show)
+if [ -z "$dev" ]; then
+	echo "${RED}Cannot create loop device${NORM}"
+	exit $FAIL
+fi
+
+mkfs.ext4 -U $IMA_UUID  -b 4096 $dev &> /dev/null
+if [ $? -ne 0 ]; then
+	echo "${RED}Cannot format $dev${NORM}"
+	exit $FAIL
+fi
+
+mount -o i_version $dev $mountpoint
+if [ $? -ne 0 ]; then
+	echo "${RED}Cannot mount loop device${NORM}"
+	exit $FAIL
+fi
+
+loop_mounted=1
+pushd $mountpoint > /dev/null
+
+expect_pass check_ima_check_imasig
+cleanup_ima_check_imasig
+expect_pass check_ima_check_imasig_meta_immutable
+cleanup_ima_check_imasig_meta_immutable
