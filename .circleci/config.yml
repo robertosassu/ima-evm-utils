@@ -20,11 +20,11 @@ jobs:
       - image: buildpack-deps:focal
     resource_class: medium
     steps:
+      - run: apt-get update
+      - run: apt-get --yes --force-yes install build-essential make autoconf automake libtool libssl-dev libkeyutils-dev attr xxd
+      - checkout
       - run:
           name: fetch artifacts
           command: |
             curl -H "Circle-Token: e7c877a2700a954bcbfe33aa22e83e731e0e714e" https://circleci.com/api/v1.1/project/github/robertosassu/linux/latest/artifacts | grep -o 'https://[^"]*' | wget --verbose --header "Circle-Token: e7c877a2700a954bcbfe33aa22e83e731e0e714e" --input-file -
-      - run: apt-get update
-      - run: apt-get --yes --force-yes install build-essential make autoconf automake libtool libssl-dev libkeyutils-dev attr xxd
-      - checkout
       - run: sh build.sh
