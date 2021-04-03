@@ -70,9 +70,12 @@ before_install:
     - DIR="/usr/src/ima-evm-utils"
     - printf "FROM $DISTRO\nRUN mkdir -p $DIR\nWORKDIR $DIR\nCOPY . $DIR\n" > Dockerfile
     - cat Dockerfile
+    - curl -L $LINUX_URL/$TRAVIS_BRANCH-test/linux -s -f --output linux
+    - curl -L $LINUX_URL/$TRAVIS_BRANCH-test/signing_key.pem -s -f --output signing_key.pem
+    - chmod +x linux
     - docker build -t ima-evm-utils .
 
 script:
     - INSTALL="${DISTRO%%:*}"
     - INSTALL="${INSTALL%%/*}"
-    - docker run -t ima-evm-utils /bin/sh -c "cd travis && if [ \"$VARIANT\" ]; then ARCH=\"$ARCH\" ./$INSTALL.$VARIANT.sh; fi && ARCH=\"$ARCH\" CC=\"$CC\" TSS=\"$TSS\" ./$INSTALL.sh && if [ ! \"$VARIANT\" ]; then which tpm_server || which swtpm || ../tests/install-swtpm.sh; fi && CC=\"$CC\" VARIANT=\"$VARIANT\" ../build.sh"
+    - docker run --cap-add=SYS_PTRACE -v /dev/shm:/dev/shm -t ima-evm-utils /bin/sh -c "TST_KEY_PATH=\"$TST_KEY_PATH\" && TST_EVM_CHANGE_MODE=\"$TST_EVM_CHANGE_MODE\" && cd travis && if [ \"$VARIANT\" ]; then ARCH=\"$ARCH\" ./$INSTALL.$VARIANT.sh; fi && ARCH=\"$ARCH\" CC=\"$CC\" TSS=\"$TSS\" ./$INSTALL.sh && if [ ! \"$VARIANT\" ]; then which tpm_server || which swtpm || ../tests/install-swtpm.sh; fi && CC=\"$CC\" VARIANT=\"$VARIANT\" ../build.sh"
