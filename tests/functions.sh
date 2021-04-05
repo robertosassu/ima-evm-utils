@@ -263,6 +263,10 @@ _report_exit() {
   [ $testsfail -gt 0 ] && echo -n "$RED" || echo -n "$NORM"
   echo " FAIL: $testsfail"
   echo "$NORM"
+  # Signal failure to UML caller with an unclean shutdown.
+  if [ $$ -eq 1 ] && [ "$(which poweroff)" ] && [ $testsfail -eq 0 ]; then
+    poweroff -f
+  fi
   if [ $testsfail -gt 0 ]; then
     exit "$FAIL"
   elif [ $testspass -gt 0 ]; then
@@ -272,3 +276,40 @@ _report_exit() {
   fi
 }
 
+# Syntax: _run_user_mode <init> <additional kernel parameters> <exit?>
+_run_user_mode() {
+  if [ ! -f ../linux ]; then
+    return
+  fi
+
+  if [ $$ -eq 1 ]; then
+    return
+  fi
+
+  expect_pass ../linux rootfstype=hostfs rw init=$1 quiet mem=256M $2
+  if [ "$3" -eq 1 ]; then
+    exit $OK
+  fi
+}
+
+_init_user_mode() {
+  if [ $$ -ne 1 ]; then
+    return
+  fi
+
+  mount -t proc proc /proc
+  mount -t sysfs sysfs /sys
+  mount -t securityfs securityfs /sys/kernel/security
+
+  pushd $PWD > /dev/null
+}
+
+_cleanup_user_mode() {
+  if [ $$ -ne 1 ]; then
+    return
+  fi
+
+  umount /sys/kernel/security
+  umount /sys
+  umount /proc
+}
