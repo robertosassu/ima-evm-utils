@@ -40,7 +40,9 @@ zypper --non-interactive install --force-resolution --no-recommends \
 	vim \
 	wget \
 	which \
-	xsltproc
+	xsltproc \
+	haveged \
+	systemd-sysvinit
 
 if [ -f /usr/lib/ibmtss/tpm_server ]; then
 	ln -s /usr/lib/ibmtss/tpm_server /usr/local/bin
