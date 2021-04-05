@@ -42,7 +42,9 @@ apk add \
 	sudo \
 	wget \
 	which \
-	xxd
+	xxd \
+	haveged \
+	openrc
 
 if [ ! "$TSS" ]; then
 	apk add git
