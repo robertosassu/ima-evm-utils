@@ -3,7 +3,7 @@ TESTS = $(check_SCRIPTS)
 
 check_SCRIPTS += ima_hash.test sign_verify.test boot_aggregate.test \
 		 portable_signatures.test ima_skip_measurement_audit.test \
-		 ima_meta_immutable.test
+		 ima_meta_immutable.test evm_hash_algo_hmac.test
 
 clean-local:
 	-rm -f *.txt *.out *.sig *.sig2
