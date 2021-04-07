@@ -4,6 +4,7 @@
 # Check if operations on files with EVM portable signatures succeed.
 
 trap cleanup SIGINT SIGTERM EXIT
+trap cleanup_segfault SIGSEGV
 
 # Base VERBOSE on the environment variable, if set.
 VERBOSE="${VERBOSE:-0}"
@@ -46,6 +47,11 @@ cleanup() {
 
 	_cleanup_user_mode
 	_report_exit
+}
+
+cleanup_segfault() {
+	echo "Segfault"
+	cleanup
 }
 
 get_xattr() {
