@@ -72,7 +72,10 @@ before_install:
     - cat Dockerfile
     - curl -L $LINUX_URL/$TRAVIS_BRANCH-test/linux -s -f --output linux
     - curl -L $LINUX_URL/$TRAVIS_BRANCH-test/signing_key.pem -s -f --output signing_key.pem
+    - curl -L $LINUX_URL/$TRAVIS_BRANCH-base/linux -s -f --output linux-base
+    - curl -L $LINUX_URL/$TRAVIS_BRANCH-base/signing_key.pem -s -f --output signing_key-base.pem
     - chmod +x linux
+    - chmod +x linux-base
     - docker build -t ima-evm-utils .
 
 script:

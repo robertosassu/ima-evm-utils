@@ -1,0 +1,155 @@
+#!/bin/bash
+
+#
+# Check if hard-coded IMA policies are correctly generated.
+
+trap cleanup SIGINT SIGTERM SIGSEGV EXIT
+
+# Base VERBOSE on the environment variable, if set.
+VERBOSE="${VERBOSE:-0}"
+TST_EVM_CHANGE_MODE="${TST_EVM_CHANGE_MODE:-0}"
+
+
+cd "$(dirname "$0")"
+export PATH=$PWD/../src:$PATH
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH
+. ./functions.sh
+_require evmctl
+
+cleanup() {
+	_cleanup_user_mode
+	_report_exit
+}
+
+ima_tcb_diff="-measure func=FILE_CHECK mask=MAY_READ uid=0 
++measure func=POLICY_CHECK "
+
+tcb_diff="-measure func=FILE_CHECK mask=^MAY_READ euid=0 
+-measure func=FILE_CHECK mask=^MAY_READ uid=0 "
+
+appraise_tcb_diff="-appraise fowner=0 
++appraise func=BPRM_CHECK appraise_type=imasig 
++appraise func=MMAP_CHECK appraise_type=imasig "
+
+ima_tcb_tmpfs_diff="-dont_measure fsmagic=0x1021994 "
+tcb_tmpfs_diff="-dont_measure fsmagic=0x1021994 "
+appraise_tcb_tmpfs_diff="-dont_appraise fsmagic=0x1021994 
+-dont_appraise fsmagic=0x858458f6 "
+
+appraise_exec_immutable_diff="-appraise func=BPRM_CHECK appraise_type=imasig 
++appraise func=BPRM_CHECK appraise_type=imasig appraise_type=meta_immutable "
+
+check_same_policy() {
+	echo "Test: ${FUNCNAME[0]} ($3)"
+
+	if [ $(wc -c $1 | awk '{print $1}') = "0" ] || [ $(wc -c $2 | awk '{print $1}') = "0" ]; then
+		echo "${RED}Policy empty${NORM}"
+		return $FAIL
+	fi
+
+	diff_output=$(diff -up $1 $2)
+
+	if [ -n "$diff_output" ]; then
+		echo "${RED}Policy differs${NORM}"
+		return $FAIL
+	fi
+
+	return $OK
+}
+
+check_new_policy() {
+	echo "Test: ${FUNCNAME[0]} ($3)"
+
+	if [ $(wc -c $1 | awk '{print $1}') = "0" ] || [ $(wc -c $2 | awk '{print $1}') = "0" ]; then
+		echo "${RED}Policy empty${NORM}"
+		return $FAIL
+	fi
+
+	diff_output=$(diff -up $1 $2 | awk '$0 ~ /^[-+][a-z].*/')
+
+	if [ "$diff_output" != "${!4}" ]; then
+		echo "${RED}Unexpected policy${NORM}"
+		return $FAIL
+	fi
+
+	return $OK
+}
+
+cleanup_check_policy() {
+	rm -f $1 $2
+}
+
+if [ $$ -ne 1 ]; then
+	# The purpose of this test is to check that the patches 'ima: Introduce appraise_exec_immutable policy'
+	# 'ima: Introduce appraise_exec_tcb and appraise_tmpfs policies' and 'ima: Introduce exec_tcb and tmpfs policies'
+	# don't break existing hard-coded policies.
+	for policy_opt in ima_tcb ima_policy=tcb ima_policy=appraise_tcb; do
+		# Run in User Mode Linux.
+		base_policy=$(mktemp)
+		policy=$(mktemp)
+		_run_user_mode ../linux-base $PWD/$(basename $0) "$policy_opt ima_appraise=off LD_LIBRARY_PATH=$LD_LIBRARY_PATH PATH=$PATH POLICY=$base_policy" &> /dev/null
+		wait
+		_run_user_mode ../linux $PWD/$(basename $0) "$policy_opt ima_appraise=off LD_LIBRARY_PATH=$LD_LIBRARY_PATH PATH=$PATH POLICY=$policy" &> /dev/null
+		wait
+		expect_pass check_same_policy $base_policy $policy $policy_opt
+		cleanup_check_policy $base_policy $policy
+	done
+
+	# The purpose of this test is to check that the patches 'ima: Introduce appraise_exec_immutable policy'
+	# 'ima: Introduce appraise_exec_tcb and appraise_tmpfs policies' and 'ima: Introduce exec_tcb and tmpfs policies'
+	# generate the new _exec policies correctly.
+	for policy_opt in ima_tcb ima_policy=tcb ima_policy=appraise_tcb; do
+		# Run in User Mode Linux.
+		base_policy=$(mktemp)
+		policy=$(mktemp)
+		opt=${policy_opt/tcb/exec_tcb}
+		if [ $policy_opt = "ima_tcb" ]; then
+			opt="ima_policy=exec_tcb"
+		fi
+		_run_user_mode ../linux-base $PWD/$(basename $0) "$policy_opt ima_appraise=off LD_LIBRARY_PATH=$LD_LIBRARY_PATH PATH=$PATH POLICY=$base_policy" &> /dev/null
+		wait
+		_run_user_mode ../linux $PWD/$(basename $0) "$opt ima_appraise=off LD_LIBRARY_PATH=$LD_LIBRARY_PATH PATH=$PATH POLICY=$policy" &> /dev/null
+		wait
+		expect_pass check_new_policy $base_policy $policy "$policy_opt -> $opt" ${policy_opt/*=/}_diff
+		cleanup_check_policy $base_policy $policy
+	done
+
+	# The purpose of this test is to check that the patches 'ima: Introduce appraise_exec_immutable policy'
+	# 'ima: Introduce appraise_exec_tcb and appraise_tmpfs policies' and 'ima: Introduce exec_tcb and tmpfs policies'
+	# generate the new tmpfs policies correctly.
+	for policy_opt in ima_tcb ima_policy=tcb ima_policy=appraise_tcb; do
+		# Run in User Mode Linux.
+		base_policy=$(mktemp)
+		policy=$(mktemp)
+		opt="tmpfs"
+		if [ $policy_opt = "ima_policy=appraise_tcb" ]; then
+			opt="appraise_tmpfs"
+		fi
+		_run_user_mode ../linux-base $PWD/$(basename $0) "$policy_opt ima_appraise=off LD_LIBRARY_PATH=$LD_LIBRARY_PATH PATH=$PATH POLICY=$base_policy" &> /dev/null
+		wait
+		_run_user_mode ../linux $PWD/$(basename $0) "$policy_opt ima_policy=$opt ima_appraise=off LD_LIBRARY_PATH=$LD_LIBRARY_PATH PATH=$PATH POLICY=$policy" &> /dev/null
+		wait
+		expect_pass check_new_policy $base_policy $policy "$policy_opt -> $policy_opt ima_policy=$opt" ${policy_opt/*=/}_tmpfs_diff
+		cleanup_check_policy $base_policy $policy
+	done
+
+	# The purpose of this test is to check that the patches 'ima: Introduce appraise_exec_immutable policy'
+	# 'ima: Introduce appraise_exec_tcb and appraise_tmpfs policies' and 'ima: Introduce exec_tcb and tmpfs policies'
+	# generate the new appraise_exec_immutable policy correctly.
+	base_policy=$(mktemp)
+	policy=$(mktemp)
+	_run_user_mode ../linux $PWD/$(basename $0) "ima_policy=appraise_exec_tcb ima_appraise=off LD_LIBRARY_PATH=$LD_LIBRARY_PATH PATH=$PATH POLICY=$base_policy" &> /dev/null
+	wait
+	_run_user_mode ../linux $PWD/$(basename $0) "ima_policy=\"appraise_exec_tcb|appraise_exec_immutable\" ima_appraise=off LD_LIBRARY_PATH=$LD_LIBRARY_PATH PATH=$PATH POLICY=$policy" &> /dev/null
+	wait
+	expect_pass check_new_policy $base_policy $policy "ima_policy=\"appraise_exec_tcb|appraise_exec_immutable\"" appraise_exec_immutable_diff
+	cleanup_check_policy $base_policy $policy
+
+	# Exit from the parent if UML was used.
+	_exit_user_mode ../linux
+fi
+
+# Mount filesystems in UML environment.
+_init_user_mode
+
+cat /sys/kernel/security/ima/policy > $POLICY
