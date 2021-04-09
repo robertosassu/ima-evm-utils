@@ -82,6 +82,7 @@ if [ $ret -eq 0 ]; then
 	tail -3 tests/ima_hash.log
 	tail -3 tests/sign_verify.log
 	tail -20 tests/boot_aggregate.log
+	tail -100 tests/portable_signatures.log
 	exit 0
 fi
 

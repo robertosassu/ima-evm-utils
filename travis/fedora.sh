@@ -40,7 +40,10 @@ yum -y install \
 	wget \
 	which \
 	haveged \
-	systemd
+	systemd \
+	keyutils \
+	e2fsprogs \
+	acl
 
 yum -y install docbook5-style-xsl || true
 yum -y install swtpm || true
