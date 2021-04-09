@@ -50,7 +50,10 @@ $apt \
 	wget \
 	xsltproc \
 	haveged \
-	systemd-sysv
+	systemd-sysv \
+	acl \
+	e2fsprogs \
+	keyutils
 
 $apt xxd || $apt vim-common
 $apt libengine-gost-openssl1.1$ARCH || true
