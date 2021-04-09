@@ -53,7 +53,9 @@ $apt \
 	systemd-sysv \
 	acl \
 	e2fsprogs \
-	keyutils
+	keyutils \
+	auditd \
+	libcap2-bin
 
 $apt xxd || $apt vim-common
 $apt libengine-gost-openssl1.1$ARCH || true

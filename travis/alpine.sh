@@ -47,7 +47,9 @@ apk add \
 	openrc \
 	acl \
 	e2fsprogs \
-	keyutils
+	keyutils \
+	audit \
+	libcap
 
 if [ ! "$TSS" ]; then
 	apk add git
