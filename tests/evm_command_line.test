@@ -1,0 +1,115 @@
+#!/bin/bash
+
+#
+# Check if EVM options in the kernel command line are correctly applied.
+
+trap cleanup SIGINT SIGTERM SIGSEGV EXIT
+
+# Base VERBOSE on the environment variable, if set.
+VERBOSE="${VERBOSE:-0}"
+TST_EVM_CHANGE_MODE="${TST_EVM_CHANGE_MODE:-0}"
+
+# From security/integrity/evm/evm.h in kernel source directory.
+let "EVM_INIT_HMAC=0x0001"
+let "EVM_INIT_X509=0x0002"
+let "EVM_ALLOW_METADATA_WRITES=0x0004"
+let "EVM_SETUP_COMPLETE=-0x80000000"
+
+cd "$(dirname "$0")"
+export PATH=$PWD/../src:$PATH
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH
+. ./functions.sh
+_require evmctl
+
+keys_dir_created=0
+
+cleanup() {
+	rm -f /etc/keys/x509_evm.der
+
+	if [ $keys_dir_created -eq 1 ]; then
+		rm -f $key_path_der
+	fi
+
+	if [ -f /etc/keys/x509_evm.der.orig ]; then
+		mv /etc/keys/x509_evm.der.orig /etc/keys/x509_evm.der
+	fi
+
+	_cleanup_user_mode
+	_report_exit
+}
+
+# Requires:
+# - evm: Extend evm= with allow_metadata_writes and complete values
+#
+# The purpose of this test is to check that after booting a kernel with
+# evm=allow_metadata_writes, /sys/kernel/security/evm is equal to
+# EVM_ALLOW_METADATA_WRITES.
+check_allow_metadata_writes() {
+	echo "Test: ${FUNCNAME[0]}"
+
+	evm_value=$(cat /sys/kernel/security/evm)
+	if [ "$evm_value" != $EVM_ALLOW_METADATA_WRITES ]; then
+		echo "${RED}Unexpected EVM mode (current: $evm_value, expected: $EVM_ALLOW_METADATA_WRITES)${NORM}"
+		return $FAIL
+	fi
+
+	return $OK
+}
+
+# Requires:
+# - evm: Extend evm= with allow_metadata_writes and complete values
+#
+# The purpose of this test is to check that after loading a X.509 certificate at
+# boot and providing the evm=complete kernel option, it is not possible to
+# modify again the current EVM mode.
+check_complete() {
+	echo "Test: ${FUNCNAME[0]}"
+
+	evm_value=$(cat /sys/kernel/security/evm)
+	echo $EVM_ALLOW_METADATA_WRITES > /sys/kernel/security/evm 2> /dev/null
+	result=$?
+	evm_value_new=$(cat /sys/kernel/security/evm)
+	if [ $result -eq 0 ]; then
+		echo "${RED}Unexpected change of EVM mode (old $evm_value, new: $evm_value_new)${NORM}"
+		exit $FAIL
+	fi		
+
+	return $OK
+}
+
+_run_user_mode ../linux $PWD/$(basename $0) "VERBOSE=$VERBOSE LD_LIBRARY_PATH=$LD_LIBRARY_PATH PATH=$PATH evm=allow_metadata_writes TST_LIST=check_allow_metadata_writes"
+wait
+
+if [ $$ -ne 1 ]; then
+	key_path="/lib/modules/$(uname -r)/source/certs/signing_key.pem"
+	if [ -n "$TST_KEY_PATH" ]; then
+		key_path=$TST_KEY_PATH
+	fi
+
+	if [ ! -d /etc/keys ]; then
+		mkdir /etc/keys
+		keys_dir_created=1
+	fi
+
+	if [ -f /etc/keys/x509_evm.der ]; then
+		mv /etc/keys/x509_evm.der /etc/keys/x509_evm.der.orig
+		if [ $? -ne 0 ]; then
+			echo "${RED}Cannot move EVM key${NORM}"
+			exit $FAIL
+		fi
+	fi
+
+	openssl x509 -in $key_path -out /etc/keys/x509_evm.der -outform der
+fi
+
+_run_user_mode ../linux $PWD/$(basename $0) "VERBOSE=$VERBOSE LD_LIBRARY_PATH=$LD_LIBRARY_PATH PATH=$PATH evm=complete TST_LIST=check_complete"
+wait
+
+# Exit from the parent if UML was used.
+_exit_user_mode ../linux
+
+# Mount filesystems in UML environment.
+_init_user_mode
+
+expect_pass check_allow_metadata_writes
+expect_pass check_complete

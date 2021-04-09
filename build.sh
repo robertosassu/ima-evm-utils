@@ -87,6 +87,7 @@ if [ $ret -eq 0 ]; then
 	tail -100 tests/ima_meta_immutable.log
 	tail -100 tests/evm_hash_algo_hmac.log
 	tail -100 tests/ima_policies.log
+	tail -100 tests/evm_command_line.log
 	exit 0
 fi
 
