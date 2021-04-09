@@ -1,0 +1,296 @@
+#!/bin/bash
+
+#
+# Check if measurement and audit are skipped correctly.
+
+trap cleanup SIGINT SIGTERM EXIT
+
+# Base VERBOSE on the environment variable, if set.
+VERBOSE="${VERBOSE:-0}"
+TST_EVM_CHANGE_MODE="${TST_EVM_CHANGE_MODE:-0}"
+
+# From security/integrity/evm/evm.h in kernel source directory
+let "EVM_INIT_HMAC=0x0001"
+let "EVM_INIT_X509=0x0002"
+let "EVM_ALLOW_METADATA_WRITES=0x0004"
+let "EVM_SETUP_COMPLETE=-0x80000000"
+
+cd "$(dirname "$0")"
+export PATH=$PWD/../src:$PATH
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH
+. ./functions.sh
+_require evmctl
+
+cleanup() {
+	if [ "$loop_mounted" = "1" ]; then
+		popd > /dev/null
+		umount $mountpoint
+	fi
+
+	if [ -n "$dev" ]; then
+		losetup -d $dev
+	fi
+
+	rm -f $image
+	rm -f $key_path_der
+	rm -Rf $mountpoint
+	_cleanup_user_mode
+	_report_exit
+}
+
+get_xattr() {
+	format="hex"
+
+	if [ "$1" = "security.selinux" ]; then
+		format="text"
+	fi
+
+	getfattr -n $1 -e $format -d $2 2> /dev/null | awk -F "=" '$1 == "'$1'" {if ("'$format'" == "hex") v=substr($2, 3); else { split($2, temp, "\""); v=temp[2] }; print v}'
+}
+
+IMA_UUID="28b23254-9467-44c0-b6ba-34b12e85a26e"
+APPRAISE_DIGSIG_FOWNER=2000
+APPRAISE_DIGSIG_RULE="appraise fsuuid=$IMA_UUID fowner=$APPRAISE_DIGSIG_FOWNER appraise_type=imasig"
+MEASURE_RULE="measure fsuuid=$IMA_UUID fowner=$APPRAISE_DIGSIG_FOWNER"
+AUDIT_RULE="audit fsuuid=$IMA_UUID fowner=$APPRAISE_DIGSIG_FOWNER"
+
+check_load_ima_rule() {
+	rule_loaded=$(cat /sys/kernel/security/ima/policy | grep "$1")
+	if [ -z "$rule_loaded" ]; then
+		new_policy=$(mktemp -p $mountpoint)
+		echo $1 > $new_policy
+		evmctl sign -o -a sha256 --imasig --key $key_path $new_policy &> /dev/null
+		echo $new_policy > /sys/kernel/security/ima/policy
+		result=$?
+		rm -f $new_policy
+
+		if [ $result -ne 0 ]; then
+			echo "${RED}Failed to set IMA policy${NORM}"
+			return $FAIL
+		fi
+	fi
+
+	return $OK
+}
+
+# Requires:
+# - ima: Avoid measurement and audit if access to the file will be denied
+#
+# The purpose of this test is to verify that the patch 'ima: Avoid measurement
+# and audit if access to the file will be denied' skips the measurement and
+# audit on an appraised file with invalid signature.
+check_ima_skip_measurement_audit() {
+	echo "Test: ${FUNCNAME[0]} (evm_value: $evm_value)"
+
+	dd if=/dev/urandom of=test-file bs=128 count=1 &> /dev/null
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot write test-file${NORM}"
+		return $FAIL
+	fi
+
+	evmctl sign -o -a sha256 --imasig --key $key_path test-file &> /dev/null
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot sign test-file${NORM}"
+		return $FAIL
+	fi
+
+	chown $APPRAISE_DIGSIG_FOWNER test-file
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot change owner of test-file${NORM}"
+		return $FAIL
+	fi
+
+	check_load_ima_rule "$APPRAISE_DIGSIG_RULE"
+	result=$?
+	if [ $result -ne $OK ]; then
+		return $result
+	fi
+
+	check_load_ima_rule "$MEASURE_RULE"
+	result=$?
+	if [ $result -ne $OK ]; then
+		return $result
+	fi
+
+	check_load_ima_rule "$AUDIT_RULE"
+	result=$?
+	if [ $result -ne $OK ]; then
+		return $result
+	fi
+
+	# Read to get a measurement entry and audit log
+	cat test-file &> /dev/null
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot read test-file${NORM}"
+		return $FAIL
+	fi
+
+	algo=$(cat /sys/kernel/security/ima/ascii_runtime_measurements | awk '$5 == "'$PWD/test-file'" {sub(/:.*/, "", $4); print $4}')
+	if [ -z "$algo" ]; then
+		algo="sha256"
+	fi
+
+	digest="$algo:$(${algo}sum test-file | awk '{print $1}')"
+	if [ -z "$digest" ]; then
+		echo "${RED}Cannot calculate the digest of test-file${NORM}"
+		return $FAIL
+	fi
+
+	# Search the test-file digest in the measurement list.
+	line=$(cat /sys/kernel/security/ima/ascii_runtime_measurements | awk '$4 == "'$digest'"')
+	if [ -z "$line" ]; then
+		echo "${RED}Measurement of test-file not found${NORM}"
+		return $FAIL
+	fi
+
+	# Search the test-file digest in /var/log/audit/audit.log.
+	line=$(cat /var/log/audit/audit.log | awk '$4 == "hash=\"'$digest'\""')
+	if [ -z "$line" ]; then
+		echo "${RED}Audit of test-file not found${NORM}"
+		return $FAIL
+	fi
+
+	# Change test-file owner to root to update content (denied for files with IMA signatures during appraisal).
+	chown root test-file
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot change owner of test-file${NORM}"
+		return $FAIL
+	fi
+
+	# Update test-file.
+	echo test >> test-file
+
+	digest="$algo:$(${algo}sum test-file | awk '{print $1}')"
+	if [ -z "$digest" ]; then
+		echo "${RED}Cannot calculate the digest of test-file${NORM}"
+		return $FAIL
+	fi
+
+	# Change test-file owner to $APPRAISE_DIGSIG_FOWNER to appraise the file and get a measurement entry and audit log.
+	chown $APPRAISE_DIGSIG_FOWNER test-file
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot change owner of test-file${NORM}"
+		return $FAIL
+	fi
+
+	# Read to get a measurement entry and audit log
+	cat test-file &> /dev/null
+	if [ $? -eq 0 ]; then
+		echo "${RED}Read of test-file succeeded, not expected${NORM}"
+		return $FAIL
+	fi
+
+	# Search the new test-file digest in the measurement list.
+	line=$(cat /sys/kernel/security/ima/ascii_runtime_measurements | awk '$4 == "'$digest'"')
+	if [ -n "$line" ]; then
+		echo "${RED}Measurement of test-file found, not expected${NORM}"
+		return $FAIL
+	fi
+
+	# Search the new test-file digest in /var/log/audit/audit.log.
+	line=$(cat /var/log/audit/audit.log | awk '$4 == "hash=\"'$digest'\""')
+	if [ -n "$line" ]; then
+		echo "${RED}Audit of test-file found, not expected${NORM}"
+		return $FAIL
+	fi
+
+	return $OK
+}
+
+cleanup_ima_skip_measurement_audit() {
+	rm -f test-file
+}
+
+# Run in User Mode Linux.
+_run_user_mode ../linux $PWD/$(basename $0) "PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH VERBOSE=$VERBOSE TST_EVM_CHANGE_MODE=$TST_EVM_CHANGE_MODE TST_KEY_PATH=$TST_KEY_PATH"
+
+# Exit from the parent if UML was used.
+_exit_user_mode ../linux
+
+# Mount filesystems in UML environment.
+_init_user_mode
+
+if [ $$ -eq 1 ]; then
+	mount -t tmpfs tmpfs /var/
+	mkdir -p /var/log/audit
+	$(which auditd 2> /dev/null)
+fi
+
+mountpoint=$(mktemp -d)
+image=$(mktemp)
+
+if [ -z "$mountpoint" ]; then
+	echo "${RED}Mountpoint directory not created${NORM}"
+	exit $FAIL
+fi
+
+if [ $(whoami) != "root" ]; then
+	echo "${CYAN}This script must be executed as root${NORM}"
+	exit $SKIP
+fi
+
+key_path="/lib/modules/$(uname -r)/source/certs/signing_key.pem"
+if [ -n "$TST_KEY_PATH" ]; then
+	key_path=$TST_KEY_PATH
+fi
+
+if [ ${key_path:0:1} != "/" ]; then
+	echo "${RED}Absolute path required for the signing key${NORM}"
+	exit $FAIL
+fi
+
+key_path_der=$(mktemp)
+
+if [ ! -f $key_path ]; then
+	echo "${CYAN}Kernel signing key not found in $key_path${NORM}"
+	exit $SKIP
+fi
+
+evm_value=0
+
+if [ -f /sys/kernel/security/evm ]; then
+	evm_value=$(cat /sys/kernel/security/evm)
+fi
+
+openssl x509 -in $key_path -out $key_path_der -outform der
+cat $key_path_der | keyctl padd asymmetric pubkey %keyring:.ima &> /dev/null
+if [ $? -ne 0 ]; then
+	echo "${RED}Public key cannot be added to the IMA keyring${NORM}"
+	exit $FAIL
+fi
+
+cat $key_path_der | keyctl padd asymmetric pubkey %keyring:.evm &> /dev/null
+if [ $? -ne 0 ]; then
+	echo "${RED}Public key cannot be added to the EVM keyring${NORM}"
+	exit $FAIL
+fi
+
+dd if=/dev/zero of=$image bs=1M count=10 &> /dev/null
+if [ $? -ne 0 ]; then
+	echo "${RED}Cannot create test image${NORM}"
+	exit $FAIL
+fi
+
+dev=$(losetup -f $image --show)
+if [ -z "$dev" ]; then
+	echo "${RED}Cannot create loop device${NORM}"
+	exit $FAIL
+fi
+
+mkfs.ext4 -U $IMA_UUID  -b 4096 $dev &> /dev/null
+if [ $? -ne 0 ]; then
+	echo "${RED}Cannot format $dev${NORM}"
+	exit $FAIL
+fi
+
+mount -o i_version $dev $mountpoint
+if [ $? -ne 0 ]; then
+	echo "${RED}Cannot mount loop device${NORM}"
+	exit $FAIL
+fi
+
+loop_mounted=1
+pushd $mountpoint > /dev/null
+
+expect_pass check_ima_skip_measurement_audit
+cleanup_ima_skip_measurement_audit

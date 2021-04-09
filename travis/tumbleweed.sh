@@ -45,7 +45,9 @@ zypper --non-interactive install --force-resolution --no-recommends \
 	systemd-sysvinit \
 	e2fsprogs \
 	keyutils \
-	acl
+	acl \
+	audit \
+	libcap-progs
 
 if [ -f /usr/lib/ibmtss/tpm_server ]; then
 	ln -s /usr/lib/ibmtss/tpm_server /usr/local/bin

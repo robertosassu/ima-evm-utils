@@ -43,7 +43,9 @@ yum -y install \
 	systemd \
 	keyutils \
 	e2fsprogs \
-	acl
+	acl \
+	audit \
+	libcap
 
 yum -y install docbook5-style-xsl || true
 yum -y install swtpm || true
