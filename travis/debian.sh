@@ -55,7 +55,8 @@ $apt \
 	e2fsprogs \
 	keyutils \
 	auditd \
-	libcap2-bin
+	libcap2-bin \
+	reiserfsprogs
 
 $apt xxd || $apt vim-common
 $apt libengine-gost-openssl1.1$ARCH || true
