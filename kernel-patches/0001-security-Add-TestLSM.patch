@@ -1,0 +1,332 @@
+From b826d54679bff7d9ce1f5c4cb2ca79ea48c776f5 Mon Sep 17 00:00:00 2001
+From: Roberto Sassu <roberto.sassu@huawei.com>
+Date: Tue, 13 Apr 2021 18:00:45 +0200
+Subject: [PATCH] security: Add TestLSM
+
+This patch adds a simple LSM to test HMAC calculation at file creation.
+
+Signed-off-by: Roberto Sassu <roberto.sassu@huawei.com>
+---
+ security/Kconfig                          |   2 +
+ security/Makefile                         |   3 +
+ security/security.c                       |   3 +-
+ security/testlsm/Kconfig                  |   6 +
+ security/testlsm/Makefile                 |  17 +++
+ security/testlsm/testlsm-noxattr-2.c      |   1 +
+ security/testlsm/testlsm-noxattr-3.c      |   1 +
+ security/testlsm/testlsm-noxattr.c        |   1 +
+ security/testlsm/testlsm-xattr-2.c        |   1 +
+ security/testlsm/testlsm-xattr-3.c        |   1 +
+ security/testlsm/testlsm-xattr-bug.c      |   1 +
+ security/testlsm/testlsm-xattr-bug2.c     |   1 +
+ security/testlsm/testlsm-xattr-disabled.c |   1 +
+ security/testlsm/testlsm-xattr.c          |   1 +
+ security/testlsm/testlsm.c                | 130 ++++++++++++++++++++++
+ security/testlsm/testlsm2-xattr.c         |   1 +
+ 16 files changed, 170 insertions(+), 1 deletion(-)
+ create mode 100644 security/testlsm/Kconfig
+ create mode 100644 security/testlsm/Makefile
+ create mode 120000 security/testlsm/testlsm-noxattr-2.c
+ create mode 120000 security/testlsm/testlsm-noxattr-3.c
+ create mode 120000 security/testlsm/testlsm-noxattr.c
+ create mode 120000 security/testlsm/testlsm-xattr-2.c
+ create mode 120000 security/testlsm/testlsm-xattr-3.c
+ create mode 120000 security/testlsm/testlsm-xattr-bug.c
+ create mode 120000 security/testlsm/testlsm-xattr-bug2.c
+ create mode 120000 security/testlsm/testlsm-xattr-disabled.c
+ create mode 120000 security/testlsm/testlsm-xattr.c
+ create mode 100644 security/testlsm/testlsm.c
+ create mode 120000 security/testlsm/testlsm2-xattr.c
+
+diff --git a/security/Kconfig b/security/Kconfig
+index 52c9af08ad35..1e1e412614c6 100644
+--- a/security/Kconfig
++++ b/security/Kconfig
+@@ -197,6 +197,8 @@ source "security/landlock/Kconfig"
+ 
+ source "security/integrity/Kconfig"
+ 
++source "security/testlsm/Kconfig"
++
+ choice
+ 	prompt "First legacy 'major LSM' to be initialized"
+ 	default DEFAULT_SECURITY_SELINUX if SECURITY_SELINUX
+diff --git a/security/Makefile b/security/Makefile
+index 59f238490665..963c5f2cabbe 100644
+--- a/security/Makefile
++++ b/security/Makefile
+@@ -28,3 +28,6 @@ obj-$(CONFIG_SECURITY_LANDLOCK)		+= landlock/
+ 
+ # Object integrity file lists
+ obj-$(CONFIG_INTEGRITY)			+= integrity/
++
++subdir-$(CONFIG_SECURITY_TESTLSM)	+= testlsm
++obj-$(CONFIG_SECURITY_TESTLSM)		+= testlsm/
+diff --git a/security/security.c b/security/security.c
+index ed26bb6d47ad..92d1410bb6fa 100644
+--- a/security/security.c
++++ b/security/security.c
+@@ -50,7 +50,8 @@
+ 	(IS_ENABLED(CONFIG_SECURITY_LOCKDOWN_LSM) ? 1 : 0) + \
+ 	(IS_ENABLED(CONFIG_BPF_LSM) ? 1 : 0) + \
+ 	(IS_ENABLED(CONFIG_SECURITY_LANDLOCK) ? 1 : 0) + \
+-	(IS_ENABLED(CONFIG_EVM) ? 1 : 0))
++	(IS_ENABLED(CONFIG_EVM) ? 1 : 0) + \
++	(IS_ENABLED(CONFIG_SECURITY_TESTLSM) ? 10 : 0))
+ 
+ /*
+  * These are descriptions of the reasons that can be passed to the
+diff --git a/security/testlsm/Kconfig b/security/testlsm/Kconfig
+new file mode 100644
+index 000000000000..637b727e982d
+--- /dev/null
++++ b/security/testlsm/Kconfig
+@@ -0,0 +1,6 @@
++# SPDX-License-Identifier: GPL-2.0-only
++config SECURITY_TESTLSM
++	bool "TestLSM"
++	depends on SECURITY
++	help
++	  This is a test LSM.
+diff --git a/security/testlsm/Makefile b/security/testlsm/Makefile
+new file mode 100644
+index 000000000000..08219cce30dc
+--- /dev/null
++++ b/security/testlsm/Makefile
+@@ -0,0 +1,17 @@
++# SPDX-License-Identifier: GPL-2.0-only
++CFLAGS_testlsm-xattr.o += -DTESTLSM_NAME=\"testlsm-xattr\" -DVAR_BLOB_SIZES=testlsm_xattr -DXATTR
++CFLAGS_testlsm-xattr-2.o += -DTESTLSM_NAME=\"testlsm-xattr-2\" -DVAR_BLOB_SIZES=testlsm_xattr_2 -DXATTR
++CFLAGS_testlsm-xattr-3.o += -DTESTLSM_NAME=\"testlsm-xattr-3\" -DVAR_BLOB_SIZES=testlsm_xattr_3 -DXATTR
++CFLAGS_testlsm-xattr-bug.o += -DTESTLSM_NAME=\"testlsm-xattr-bug\" -DVAR_BLOB_SIZES=testlsm_xattr_bug -DXATTR -DLSMBUG
++CFLAGS_testlsm-xattr-bug2.o += -DTESTLSM_NAME=\"testlsm-xattr-bug2\" -DVAR_BLOB_SIZES=testlsm_xattr_bug2 -DXATTR -DLSMBUG2
++CFLAGS_testlsm-noxattr.o += -DTESTLSM_NAME=\"testlsm-noxattr\" -DVAR_BLOB_SIZES=testlsm_noxattr
++CFLAGS_testlsm-noxattr-2.o += -DTESTLSM_NAME=\"testlsm-noxattr-2\" -DVAR_BLOB_SIZES=testlsm_noxattr_2
++CFLAGS_testlsm-noxattr-3.o += -DTESTLSM_NAME=\"testlsm-noxattr-3\" -DVAR_BLOB_SIZES=testlsm_noxattr_3
++CFLAGS_testlsm2-xattr.o += -DTESTLSM_NAME=\"testlsm2-xattr\" -DVAR_BLOB_SIZES=testlsm2_xattr -DXATTR -DXATTR2
++CFLAGS_testlsm-xattr-disabled.o += -DTESTLSM_NAME=\"testlsm-xattr-disabled\" -DVAR_BLOB_SIZES=testlsm_xattr_disabled -DXATTR -DDISABLED_STATE
++
++obj-$(CONFIG_SECURITY_TESTLSM) += testlsm-xattr.o testlsm-xattr-2.o \
++				  testlsm-xattr-3.o testlsm-xattr-bug.o \
++				  testlsm-xattr-bug2.o testlsm-noxattr.o \
++				  testlsm-noxattr-2.o testlsm-noxattr-3.o \
++				  testlsm2-xattr.o testlsm-xattr-disabled.o
+diff --git a/security/testlsm/testlsm-noxattr-2.c b/security/testlsm/testlsm-noxattr-2.c
+new file mode 120000
+index 000000000000..e1cfe431f3c5
+--- /dev/null
++++ b/security/testlsm/testlsm-noxattr-2.c
+@@ -0,0 +1 @@
++testlsm.c
+\ No newline at end of file
+diff --git a/security/testlsm/testlsm-noxattr-3.c b/security/testlsm/testlsm-noxattr-3.c
+new file mode 120000
+index 000000000000..e1cfe431f3c5
+--- /dev/null
++++ b/security/testlsm/testlsm-noxattr-3.c
+@@ -0,0 +1 @@
++testlsm.c
+\ No newline at end of file
+diff --git a/security/testlsm/testlsm-noxattr.c b/security/testlsm/testlsm-noxattr.c
+new file mode 120000
+index 000000000000..e1cfe431f3c5
+--- /dev/null
++++ b/security/testlsm/testlsm-noxattr.c
+@@ -0,0 +1 @@
++testlsm.c
+\ No newline at end of file
+diff --git a/security/testlsm/testlsm-xattr-2.c b/security/testlsm/testlsm-xattr-2.c
+new file mode 120000
+index 000000000000..e1cfe431f3c5
+--- /dev/null
++++ b/security/testlsm/testlsm-xattr-2.c
+@@ -0,0 +1 @@
++testlsm.c
+\ No newline at end of file
+diff --git a/security/testlsm/testlsm-xattr-3.c b/security/testlsm/testlsm-xattr-3.c
+new file mode 120000
+index 000000000000..e1cfe431f3c5
+--- /dev/null
++++ b/security/testlsm/testlsm-xattr-3.c
+@@ -0,0 +1 @@
++testlsm.c
+\ No newline at end of file
+diff --git a/security/testlsm/testlsm-xattr-bug.c b/security/testlsm/testlsm-xattr-bug.c
+new file mode 120000
+index 000000000000..e1cfe431f3c5
+--- /dev/null
++++ b/security/testlsm/testlsm-xattr-bug.c
+@@ -0,0 +1 @@
++testlsm.c
+\ No newline at end of file
+diff --git a/security/testlsm/testlsm-xattr-bug2.c b/security/testlsm/testlsm-xattr-bug2.c
+new file mode 120000
+index 000000000000..1460ab4515ab
+--- /dev/null
++++ b/security/testlsm/testlsm-xattr-bug2.c
+@@ -0,0 +1 @@
++testlsm-xattr-bug.c
+\ No newline at end of file
+diff --git a/security/testlsm/testlsm-xattr-disabled.c b/security/testlsm/testlsm-xattr-disabled.c
+new file mode 120000
+index 000000000000..e1cfe431f3c5
+--- /dev/null
++++ b/security/testlsm/testlsm-xattr-disabled.c
+@@ -0,0 +1 @@
++testlsm.c
+\ No newline at end of file
+diff --git a/security/testlsm/testlsm-xattr.c b/security/testlsm/testlsm-xattr.c
+new file mode 120000
+index 000000000000..e1cfe431f3c5
+--- /dev/null
++++ b/security/testlsm/testlsm-xattr.c
+@@ -0,0 +1 @@
++testlsm.c
+\ No newline at end of file
+diff --git a/security/testlsm/testlsm.c b/security/testlsm/testlsm.c
+new file mode 100644
+index 000000000000..79f9c239467a
+--- /dev/null
++++ b/security/testlsm/testlsm.c
+@@ -0,0 +1,130 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * TestLSM
++ *
++ * Copyright 2021 Huawei Technologies Duesseldorf GmbH
++ *
++ * Author: Roberto Sassu <roberto.sassu@huawei.com>
++ */
++
++#define pr_fmt(fmt) "TestLSM: " fmt
++
++#include <linux/lsm_hooks.h>
++#include <linux/xattr.h>
++
++#define XATTR_TESTLSM_SUFFIX TESTLSM_NAME
++#define XATTR_NAME_TESTLSM XATTR_SECURITY_PREFIX XATTR_TESTLSM_SUFFIX
++#define XATTR_TESTLSM_SUFFIX2 TESTLSM_NAME "2"
++#define XATTR_NAME_TESTLSM2 XATTR_SECURITY_PREFIX XATTR_TESTLSM_SUFFIX2
++
++#define IMA_UUID "28b23254-9467-44c0-b6ba-34b12e85a26d"
++#define IMA_UUID2 "28b23254-9467-44c0-b6ba-34b12e85a26e"
++#define IMA_UUID3 "28b23254-9467-44c0-b6ba-34b12e85a26f"
++
++struct lsm_blob_sizes VAR_BLOB_SIZES __ro_after_init = {
++#if defined XATTR && !defined XATTR2
++	.lbs_xattr_count = 1,
++#else
++#if defined XATTR && defined XATTR2
++	.lbs_xattr_count = 2,
++#else
++	.lbs_xattr_count = 0,
++#endif
++#endif
++};
++
++static int testlsm_inode_init_security(struct inode *inode,
++				struct inode *dir, const struct qstr *qstr,
++				struct xattr *xattrs, int *num_filled_xattrs)
++{
++#if defined LSMBUG || defined LSMBUG2
++	uuid_t ima_uuid, ima_uuid3;
++#endif
++	int ret = -EOPNOTSUPP;
++#if defined XATTR && !defined DISABLED_STATE
++	struct xattr *xattr = NULL;
++#ifdef XATTR2
++	struct xattr *xattr2 = NULL;
++#endif
++#if defined LSMBUG || defined LSMBUG2
++	ret = uuid_parse(IMA_UUID, &ima_uuid);
++	if (ret < 0)
++		return ret;
++
++	ret = uuid_parse(IMA_UUID3, &ima_uuid3);
++	if (ret < 0)
++		return ret;
++
++#ifdef LSMBUG2
++	if (uuid_equal(&ima_uuid, &inode->i_sb->s_uuid) ||
++	    uuid_equal(&ima_uuid3, &inode->i_sb->s_uuid) ||
++	    !strcmp(inode->i_sb->s_type->name, "reiserfs"))
++		return 0;
++#endif
++#endif
++	if (xattrs)
++		xattr = lsm_get_xattr_slot(xattrs, num_filled_xattrs);
++
++	if (xattr) {
++		xattr->name = XATTR_TESTLSM_SUFFIX;
++	}
++
++#ifdef XATTR2
++	if (xattrs)
++		xattr2 = lsm_get_xattr_slot(xattrs, num_filled_xattrs);
++
++	if (xattr2) {
++		xattr2->name = XATTR_TESTLSM_SUFFIX2;
++	}
++#endif
++
++#ifdef LSMBUG
++	if (uuid_equal(&ima_uuid, &inode->i_sb->s_uuid) ||
++	    uuid_equal(&ima_uuid3, &inode->i_sb->s_uuid) ||
++	    !strcmp(inode->i_sb->s_type->name, "reiserfs"))
++		xattr->name = NULL;
++#endif
++	if (xattr) {
++		xattr->value = kstrdup(TESTLSM_NAME, GFP_NOFS);
++		if (!xattr->value)
++			return -ENOMEM;
++
++		xattr->value_len = sizeof(TESTLSM_NAME);
++	}
++
++#ifdef XATTR2
++	if (xattr2) {
++		xattr2->value = kstrdup(TESTLSM_NAME, GFP_NOFS);
++		if (!xattr2->value)
++			return -ENOMEM;
++
++		xattr2->value_len = sizeof(TESTLSM_NAME);
++	}
++#endif
++
++	ret = 0;
++#endif
++	return ret;
++}
++
++static struct security_hook_list testlsm_hook[] __ro_after_init = {
++	LSM_HOOK_INIT(inode_init_security, testlsm_inode_init_security),
++};
++
++static const struct lsm_id testlsm_lsmid = {
++	.name = TESTLSM_NAME,
++	.id = 1000,
++};
++
++static int __init testlsm_init(void)
++{
++	security_add_hooks(testlsm_hook, ARRAY_SIZE(testlsm_hook),
++			   &testlsm_lsmid);
++	return 0;
++}
++
++DEFINE_LSM(testlsm) = {
++	.name = TESTLSM_NAME,
++	.init = testlsm_init,
++	.blobs = &VAR_BLOB_SIZES,
++};
+diff --git a/security/testlsm/testlsm2-xattr.c b/security/testlsm/testlsm2-xattr.c
+new file mode 120000
+index 000000000000..e1cfe431f3c5
+--- /dev/null
++++ b/security/testlsm/testlsm2-xattr.c
+@@ -0,0 +1 @@
++testlsm.c
+\ No newline at end of file
+-- 
+2.34.1
+
