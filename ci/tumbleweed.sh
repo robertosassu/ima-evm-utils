@@ -47,7 +47,8 @@ zypper --non-interactive install --force-resolution --no-recommends \
 	e2fsprogs \
 	keyutils \
 	acl \
-	libcap-progs
+	libcap-progs \
+	reiserfs
 
 zypper --non-interactive install --force-resolution --no-recommends \
 	gnutls openssl-engine-libp11 softhsm || true

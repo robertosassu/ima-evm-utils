@@ -56,7 +56,9 @@ $apt \
 	acl \
 	e2fsprogs \
 	keyutils \
-	libcap2-bin
+	libcap2-bin \
+	reiserfsprogs \
+	libdigest-whirlpool-perl
 
 $apt xxd || $apt vim-common
 $apt libengine-gost-openssl1.1$ARCH || true

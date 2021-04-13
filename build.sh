@@ -91,6 +91,7 @@ if [ $ret -eq 0 ]; then
 	fi
 	tail -20 tests/boot_aggregate.log
 	tail -100 tests/portable_signatures.log
+	tail -100 tests/evm_multiple_lsms.log
 	exit 0
 fi
 
