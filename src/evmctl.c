@@ -78,6 +78,8 @@
 #define XATTR_NAME_APPARMOR XATTR_SECURITY_PREFIX XATTR_APPARMOR_SUFFIX
 #endif
 
+#define NUM_MAX_XATTRS         32
+
 #define USE_FPRINTF
 
 #include "imaevm.h"
@@ -172,6 +174,66 @@ static unsigned npcrfile;
 
 #define log_errno_reset(level, fmt, args...) \
 	{do_log(level, fmt " (errno: %s)\n", ##args, strerror(errno)); errno = 0; }
+
+void free_xattrnames(void)
+{
+	int i;
+
+	if (evm_config_xattrnames == evm_default_xattrs ||
+	    evm_config_xattrnames == evm_extra_smack_xattrs)
+		return;
+
+	for (i = 0; i < 16; i++)
+		if (evm_config_xattrnames[i])
+			free(evm_config_xattrnames[i]);
+
+	free(evm_config_xattrnames);
+}
+
+int init_xattrnames(void)
+{
+	FILE *fp;
+	char buf[XATTR_NAME_MAX + 1], *p;
+	int ret, i = 0;
+
+	fp = fopen("/sys/kernel/security/integrity/evm/evm_xattrs", "r");
+	if (!fp)
+		return -EACCES;
+
+	evm_config_xattrnames = calloc(32, sizeof(unsigned char *));
+	if (!evm_config_xattrnames) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	for (;;) {
+		p = fgets(buf, sizeof(buf), fp);
+		if (!p)
+			break;
+
+		if (i >= NUM_MAX_XATTRS) {
+			log_err("Too many xattrs, increase NUM_MAX_XATTRS\n");
+			ret = -EINVAL;
+			goto out;
+		}
+
+		evm_config_xattrnames[i] = strndup(buf, strlen(buf) - 1);
+		if (!evm_config_xattrnames[i]) {
+			ret = -ENOMEM;
+			goto out;
+		}
+
+		i++;
+	}
+
+	ret = 0;
+out:
+	fclose(fp);
+	if (ret < 0)
+		free_xattrnames();
+
+	return ret;
+}
 
 static int bin2file(const char *file, const char *ext, const unsigned char *data, int len)
 {
@@ -2949,6 +3011,7 @@ static struct option opts[] = {
 	{"veritysig", 0, 0, 146},
 	{"hwtpm", 0, 0, 147},
 	{"hmackey", 1, 0, 148},
+	{"kernel-xattr-list", 0, 0, 149},
 	{}
 
 };
@@ -3197,6 +3260,9 @@ int main(int argc, char *argv[])
 		case 148:
 			imaevm_params.hmackeyfile = optarg;
 			break;
+		case 149:
+			init_xattrnames();
+			break;
 		case '?':
 			exit(1);
 			break;
@@ -3251,5 +3317,6 @@ error:
 	ERR_free_strings();
 	EVP_cleanup();
 	BIO_free(NULL);
+	free_xattrnames();
 	return err;
 }
