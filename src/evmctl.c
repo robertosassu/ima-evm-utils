@@ -1142,6 +1142,7 @@ static int calc_evm_hmac(const char *file, const char *keyfile, unsigned char *h
 	int keylen;
 	unsigned char evmkey[MAX_KEY_SIZE];
 	char list[1024];
+	char uuid[16];
 	ssize_t list_size;
 	struct h_misc_64 hmac_misc;
 	int hmac_size;
@@ -1267,6 +1268,18 @@ static int calc_evm_hmac(const char *file, const char *keyfile, unsigned char *h
 	if (err) {
 		log_err("HMAC_Update() failed\n");
 		goto out_ctx_cleanup;
+	}
+	if (!(hmac_flags & HMAC_FLAG_NO_UUID)) {
+		err = get_uuid(&st, uuid);
+		if (err)
+			goto out_ctx_cleanup;
+
+		printf("here\n");
+		err = !HMAC_Update(pctx, (const unsigned char *)uuid, sizeof(uuid));
+		if (err) {
+			log_err("HMAC_Update() failed\n");
+			goto out_ctx_cleanup;
+		}
 	}
 	err = !HMAC_Final(pctx, hash, &mdlen);
 	if (err)
