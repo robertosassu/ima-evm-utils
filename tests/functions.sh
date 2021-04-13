@@ -437,6 +437,8 @@ _init_env() {
   if grep -q smack < /sys/kernel/security/lsm; then
     mount -t smackfs smackfs /sys/fs/smackfs
   fi
+  mount -t configfs configfs /sys/kernel/config
+  mount -t debugfs nodev /sys/kernel/debug
 
   if [ -n "$(command -v haveged 2> /dev/null)" ]; then
     $(command -v haveged) -w 1024 &> /dev/null
@@ -458,6 +460,8 @@ _cleanup_env() {
 
   $1
 
+  umount /sys/kernel/config
+  umount /sys/kernel/debug
   if grep -q smack < /sys/kernel/security/lsm; then
     umount /sys/fs/smackfs
   fi
