@@ -325,6 +325,8 @@ _init_user_mode() {
   mount -t proc proc /proc
   mount -t sysfs sysfs /sys
   mount -t securityfs securityfs /sys/kernel/security
+  mount -t configfs configfs /sys/kernel/config
+  mount -t debugfs nodev /sys/kernel/debug
 
   if [ -n "$(which haveged 2> /dev/null)" ]; then
     $(which haveged) -w 1024 &> /dev/null
@@ -340,6 +342,8 @@ _cleanup_user_mode() {
   fi
 
   umount /sys/kernel/security
+  umount /sys/kernel/config
+  umount /sys/kernel/debug
   umount /sys
   umount /proc
 }
