@@ -173,6 +173,62 @@ static unsigned npcrfile;
 #define log_errno_reset(level, fmt, args...) \
 	{do_log(level, fmt " (errno: %s)\n", ##args, strerror(errno)); errno = 0; }
 
+void free_xattrnames(void)
+{
+	int i;
+
+	if (evm_config_xattrnames == evm_default_xattrs ||
+	    evm_config_xattrnames == evm_extra_smack_xattrs)
+		return;
+
+	for (i = 0; i < 16; i++)
+		if (evm_config_xattrnames[i])
+			free(evm_config_xattrnames[i]);
+
+	free(evm_config_xattrnames);
+}
+
+int init_xattrnames(void)
+{
+	char xattr_name[XATTR_NAME_MAX + 1], *ptr;
+	size_t len = 0;
+	int ret, fd, i = 0;
+
+	fd = open("/sys/kernel/security/integrity/evm/evm_xattrs", O_RDONLY);
+	if (fd < 0)
+		return -EACCES;
+
+	evm_config_xattrnames = calloc(16, sizeof(unsigned char *));
+	if (!evm_config_xattrnames) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	while ((len = read(fd, xattr_name + len, sizeof(xattr_name) - len))) {
+		while ((ptr = strchr(xattr_name, '\n'))) {
+			*ptr = '\0';
+			evm_config_xattrnames[i] = strdup(xattr_name);
+			if (!evm_config_xattrnames[i]) {
+				ret = -ENOMEM;
+				goto out;
+			}
+
+			memmove(xattr_name, ptr + 1,
+				len - (ptr + 1 - xattr_name));
+			i++;
+			len -= ptr + 1 - xattr_name;
+		}
+	}
+
+	ret = 0;
+out:
+	close(fd);
+	if (ret < 0)
+		free_xattrnames();
+
+	return ret;
+}
+
 static int bin2file(const char *file, const char *ext, const unsigned char *data, int len)
 {
 	FILE *fp;
@@ -2945,6 +3001,7 @@ static struct option opts[] = {
 	{"veritysig", 0, 0, 146},
 	{"hwtpm", 0, 0, 147},
 	{"hmackey", 1, 0, 148},
+	{"kernel-xattr-list", 0, 0, 149},
 	{}
 
 };
@@ -3193,6 +3250,9 @@ int main(int argc, char *argv[])
 		case 148:
 			imaevm_params.hmackeyfile = optarg;
 			break;
+		case 149:
+			init_xattrnames();
+			break;
 		case '?':
 			exit(1);
 			break;
@@ -3247,5 +3307,6 @@ error:
 	ERR_free_strings();
 	EVP_cleanup();
 	BIO_free(NULL);
+	free_xattrnames();
 	return err;
 }
