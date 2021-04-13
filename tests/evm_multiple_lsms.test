@@ -1,0 +1,445 @@
+#!/bin/bash
+
+#
+# Check if HMAC calculation is correct with multiple LSMs providing an xattr at file creation.
+
+trap '_report_exit_and_cleanup _cleanup_env cleanup' SIGINT SIGTERM SIGSEGV EXIT
+
+# Base VERBOSE on the environment variable, if set.
+VERBOSE="${VERBOSE:-0}"
+
+# From security/integrity/evm/evm.h in kernel source directory
+(( EVM_INIT_HMAC=0x0001 ))
+
+cd "$(dirname "$0")" || exit "$FAIL"
+export PATH=$PWD/../src:$PATH
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH
+. ./functions.sh
+_require evmctl
+
+cleanup() {
+	if [ -n "$g_masterkey" ]; then
+		rm "$g_masterkey"
+	fi
+
+	if [ "$g_loop3_mounted" = "1" ]; then
+		popd > /dev/null || exit "$FAIL"
+		umount "$g_mountpoint3"
+	fi
+
+	if [ "$g_loop2_mounted" = "1" ]; then
+		popd > /dev/null || exit "$FAIL"
+		umount "$g_mountpoint2"
+	fi
+
+	if [ "$g_loop_mounted" = "1" ]; then
+		popd > /dev/null || exit "$FAIL"
+		umount "$g_mountpoint"
+	fi
+
+	if [ -n "$g_dev3" ]; then
+		losetup -d "$g_dev3"
+	fi
+
+	if [ -n "$g_dev2" ]; then
+		losetup -d "$g_dev2"
+	fi
+
+	if [ -n "$g_dev" ]; then
+		losetup -d "$g_dev"
+	fi
+
+	if [ -n "$g_image" ]; then
+		rm -f "$g_image"
+	fi
+
+	if [ -n "$g_image2" ]; then
+		rm -f "$g_image2"
+	fi
+
+	if [ -n "$g_image3" ]; then
+		rm -f "$g_image3"
+	fi
+
+	if [ -n "$g_mountpoint" ]; then
+		rm -Rf "$g_mountpoint"
+	fi
+
+	if [ -n "$g_mountpoint2" ]; then
+		rm -Rf "$g_mountpoint2"
+	fi
+
+	if [ -n "$g_mountpoint3" ]; then
+		rm -Rf "$g_mountpoint3"
+	fi
+}
+
+get_xattr() {
+	local format="hex"
+
+	if [ "$1" = "security.selinux" ] || [ "${1#security.testlsm}" != "$1" ]; then
+		format="text"
+	fi
+
+	getfattr -n "$1" -e "$format" -d "$2" 2> /dev/null | awk -F "=" '$1 == "'"$1"'" {if ("'"$format"'" == "hex") v=substr($2, 3); else { split($2, temp, "\""); v=temp[2] }; print v}'
+}
+
+IMA_UUID="28b23254-9467-44c0-b6ba-34b12e85a26d"
+IMA_UUID2="28b23254-9467-44c0-b6ba-34b12e85a26e"
+IMA_UUID3="28b23254-9467-44c0-b6ba-34b12e85a26f"
+
+check_lsm_xattrs() {
+	local lsms testlsm_xattr
+
+	echo "Test: ${FUNCNAME[0]} (evm_hash: $1, evm_value: $evm_value, lsm: $LSM_LIST, fs: $2)"
+
+	echo "test" 2>/dev/null > test-file
+
+	if [ "${LSM_LIST/testlsm-xattr-bug/}" != "$LSM_LIST" ]; then
+		if [ -f test-file ]; then
+			echo "${RED}test-file creation unexpected${NORM}"
+			return "$FAIL"
+		fi
+
+		return "$OK"
+	fi
+
+	for lsm in ${LSM_LIST//,/ }; do
+		lsms="$(cat /sys/kernel/security/lsm)"
+		if [ "$lsm" != "integrity" ] && [ "${lsms/$lsm/}" = "$lsms" ]; then
+			echo "${RED}LSM $lsm not found${NORM}"
+			return "$FAIL"
+		fi
+
+		if [ "${lsm#testlsm}" = "$lsm" ]; then
+			continue
+		fi
+
+		if [ "${lsm#testlsm-xattr}" = "$lsm" ] && [ "${lsm#testlsm2-xattr}" = "$lsm" ]; then
+			continue
+		fi
+
+		if [ "${lsm%-disabled}" != "$lsm" ]; then
+			continue;
+		fi
+
+		testlsm_xattr="$(get_xattr security."$lsm" test-file)"
+		if [ "$testlsm_xattr" != "$lsm" ]; then
+			echo "${RED}Missing security.$lsm or unexpected value $testlsm_xattr${NORM}"
+			return "$FAIL"
+		fi
+
+		if [ -n "$g_mountpoint2" ] && [ "$(mount | awk '$3 =="'"$g_mountpoint2"'" {print $5}')" = "reiserfs" ]; then
+			break
+		fi
+
+		if [ -n "$g_mountpoint3" ] && [ "$(mount | awk '$3 =="'"$g_mountpoint3"'" {print $5}')" = "ocfs2" ]; then
+			break
+		fi
+
+		if [ "$lsm" != "testlsm2-xattr" ]; then
+			continue
+		fi
+
+		testlsm_xattr="$(get_xattr security."${lsm}"2 test-file)"
+		if [ "$testlsm_xattr" != "${lsm}" ]; then
+			echo "${RED}Missing security.$lsm or unexpected value $testlsm_xattr${NORM}"
+			return "$FAIL"
+		fi
+	done
+
+	return "$OK"
+}
+
+cleanup_lsm_xattrs() {
+	rm -f test-file
+}
+
+# The purpose of this test is to verify that EVM takes into account for HMAC
+# calculation all xattrs provided by LSMs.
+check_evm_hmac() {
+	local protected_xattrs evm_xattr evm_xattr_evmctl test_file_digest
+
+	echo "Test: ${FUNCNAME[0]} (evm_hash: $1, evm_value: $evm_value, lsm: $LSM_LIST, algo: $1, fs: $2)"
+
+	if [ "${LSM_LIST/testlsm-xattr-bug/}" != "$LSM_LIST" ]; then
+		return "$OK"
+	fi
+
+	if ! touch test-file; then
+		echo "${RED}Cannot create test-file${NORM}"
+		return "$FAIL"
+	fi
+
+	protected_xattrs=0
+	for lsm in ${LSM_LIST//,/ }; do
+		if [ "${lsm#testlsm}" = "$lsm" ]; then
+			continue
+		fi
+
+		if [ "${lsm#testlsm-xattr}" = "$lsm" ] && [ "${lsm#testlsm2-xattr}" = "$lsm" ]; then
+			continue
+		fi
+
+		if [ "${lsm%-disabled}" != "$lsm" ]; then
+			continue;
+		fi
+
+		(( protected_xattrs++ ))
+	done
+
+	if [ "$protected_xattrs" -eq 0 ]; then
+		return "$OK"
+	fi
+
+	# Compare HMAC calculated by the kernel with that calculated by evmctl.
+	evm_xattr="$(get_xattr security.evm test-file)"
+	test_file_digest=$("$1"sum test-file | awk '{print $1}')
+	# evm_xattr has an extra byte at the beginning for the xattr type.
+	if [ "${#evm_xattr}" != $(( ${#test_file_digest} + 2 )) ]; then
+		echo "${RED}Unexpected size of security.evm${NORM}"
+		return "$FAIL"
+	fi
+
+	evm_xattr_evmctl="$(evmctl hmac -v -n test-file --uuid=$IMA_UUID -a "$1" --hmackey "$TST_HMAC_KEY_PATH" --kernel-xattr-list 2>&1 | awk -F " " '$1 == "hmac:" {print $2}')"
+	if [ "$evm_xattr" != "02$evm_xattr_evmctl" ]; then
+		echo "${RED}security.evm mismatch between the kernel and evmctl${NORM}"
+		return "$FAIL"
+	fi
+
+	return "$OK"
+}
+
+cleanup_evm_hmac() {
+	rm -f test-file
+}
+
+if [ -z "$TST_ENV" ]; then
+	exit "$SKIP"
+fi
+
+if [ -z "$(command -v mkfs.reiserfs)" ]; then
+	echo "${CYAN}mkfs.reiserfs not found${NORM}"
+	exit "$SKIP"
+fi
+
+if [ -z "$(command -v mkfs.ocfs2)" ]; then
+	echo "${CYAN}mkfs.ocfs2 not found${NORM}"
+	exit "$SKIP"
+fi
+
+if [ $$ -ne 1 ]; then
+	# Run in the new environment if TST_ENV is set.
+
+	LSM_LIST="testlsm-xattr,testlsm-noxattr"
+	_run_env "$TST_KERNEL" "$PWD/$(basename "$0")" "TST_ENV=$TST_ENV TST_KERNEL=$TST_KERNEL PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH VERBOSE=$VERBOSE lsm=$LSM_LIST LSM_LIST=$LSM_LIST"
+
+	LSM_LIST="testlsm-noxattr,testlsm-noxattr-2"
+	_run_env "$TST_KERNEL" "$PWD/$(basename "$0")" "TST_ENV=$TST_ENV TST_KERNEL=$TST_KERNEL PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH VERBOSE=$VERBOSE lsm=$LSM_LIST LSM_LIST=$LSM_LIST"
+
+	LSM_LIST="testlsm-noxattr,testlsm-xattr"
+	_run_env "$TST_KERNEL" "$PWD/$(basename "$0")" "TST_ENV=$TST_ENV TST_KERNEL=$TST_KERNEL PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH VERBOSE=$VERBOSE lsm=$LSM_LIST LSM_LIST=$LSM_LIST"
+
+	LSM_LIST="testlsm-xattr-3,testlsm-noxattr,testlsm-noxattr-2,testlsm-xattr-2"
+	_run_env "$TST_KERNEL" "$PWD/$(basename "$0")" "TST_ENV=$TST_ENV TST_KERNEL=$TST_KERNEL PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH VERBOSE=$VERBOSE lsm=$LSM_LIST LSM_LIST=$LSM_LIST"
+
+	LSM_LIST="testlsm-xattr-2,testlsm-noxattr,testlsm-noxattr-2,testlsm-xattr,testlsm-xattr-3,testlsm-noxattr-3"
+	_run_env "$TST_KERNEL" "$PWD/$(basename "$0")" "TST_ENV=$TST_ENV TST_KERNEL=$TST_KERNEL PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH VERBOSE=$VERBOSE lsm=$LSM_LIST LSM_LIST=$LSM_LIST"
+
+	LSM_LIST="testlsm-xattr-bug,testlsm-xattr-2"
+	_run_env "$TST_KERNEL" "$PWD/$(basename "$0")" "TST_ENV=$TST_ENV TST_KERNEL=$TST_KERNEL PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH VERBOSE=$VERBOSE lsm=$LSM_LIST LSM_LIST=$LSM_LIST"
+
+	LSM_LIST="testlsm2-xattr,testlsm-xattr-2"
+	_run_env "$TST_KERNEL" "$PWD/$(basename "$0")" "TST_ENV=$TST_ENV TST_KERNEL=$TST_KERNEL PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH VERBOSE=$VERBOSE lsm=$LSM_LIST LSM_LIST=$LSM_LIST"
+
+	LSM_LIST="testlsm2-xattr,testlsm-xattr-disabled,testlsm-xattr,testlsm-noxattr,testlsm-xattr-2"
+	_run_env "$TST_KERNEL" "$PWD/$(basename "$0")" "TST_ENV=$TST_ENV TST_KERNEL=$TST_KERNEL PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH VERBOSE=$VERBOSE lsm=$LSM_LIST LSM_LIST=$LSM_LIST"
+
+	LSM_LIST="testlsm-xattr-disabled,testlsm-xattr,testlsm-noxattr,testlsm-xattr-2"
+	_run_env "$TST_KERNEL" "$PWD/$(basename "$0")" "TST_ENV=$TST_ENV TST_KERNEL=$TST_KERNEL PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH VERBOSE=$VERBOSE lsm=$LSM_LIST LSM_LIST=$LSM_LIST"
+
+	# Exit from the creator of the new environment.
+	_exit_env "$TST_KERNEL"
+fi
+
+# Mount filesystems in the new environment.
+_init_env
+
+g_mountpoint="$(mktemp -d)"
+g_image="$(mktemp)"
+
+if [ -z "$g_mountpoint" ]; then
+	echo "${RED}Mountpoint directory not created${NORM}"
+	exit "$FAIL"
+fi
+
+if [ "$(whoami)" != "root" ]; then
+	echo "${CYAN}This script must be executed as root${NORM}"
+	exit "$SKIP"
+fi
+
+if ! dd if=/dev/zero of="$g_image" bs=1M count=10 &> /dev/null; then
+	echo "${RED}Cannot create test image${NORM}"
+	exit "$FAIL"
+fi
+
+g_dev="$(losetup -f "$g_image" --show)"
+if [ -z "$g_dev" ]; then
+	echo "${RED}Cannot create loop device${NORM}"
+	exit "$FAIL"
+fi
+
+if ! mkfs.ext4 -U $IMA_UUID -b 4096 "$g_dev" &> /dev/null; then
+	echo "${RED}Cannot format $g_dev${NORM}"
+	exit "$FAIL"
+fi
+
+if ! mount -o i_version "$g_dev" "$g_mountpoint"; then
+	echo "${RED}Cannot mount loop device${NORM}"
+	exit "$FAIL"
+fi
+
+g_loop_mounted=1
+chmod 777 "$g_mountpoint"
+pushd "$g_mountpoint" > /dev/null || exit "$FAIL"
+
+if [ -f /sys/kernel/security/evm ]; then
+	evm_value=$(cat /sys/kernel/security/evm)
+fi
+
+if [ -n "$evm_value" ] && [ $((evm_value & EVM_INIT_HMAC)) -ne $EVM_INIT_HMAC ]; then
+	g_masterkey="$(mktemp)"
+	g_hmackey="$(mktemp)"
+	if [ -z "$TST_HMAC_KEY_PATH" ]; then
+		TST_HMAC_KEY_PATH="$g_hmackey"
+	fi
+
+	if ! dd if=/dev/zero of="$g_masterkey" bs=128 count=1 &> /dev/null; then
+		echo "${RED}Failed to generate a masterkey${NORM}"
+		exit "$FAIL"
+	fi
+
+	g_user_id="$(keyctl padd user kmk @u < "$g_masterkey")"
+	g_evm_id="$(keyctl add encrypted evm-key "new user:kmk 128" @u)"
+	keyctl print "$g_evm_id" &> /dev/null
+	dmesg | awk '$3 == "decrypted" {for (i=5;i<=NF;i++) printf("%s", $i)}' | xxd -r -p > "$g_hmackey"
+	if ! echo "$EVM_INIT_HMAC" > /sys/kernel/security/evm; then
+		keyctl unlink "$g_user_id"
+		keyctl unlink "$g_evm_id"
+	fi
+fi
+
+if [ -f /sys/kernel/security/evm ]; then
+	evm_value="$(cat /sys/kernel/security/evm)"
+
+	for lsm in ${LSM_LIST//,/ }; do
+		if [ "${lsm#testlsm}" = "$lsm" ]; then
+			continue
+		fi
+
+		echo "security.$lsm" > /sys/kernel/security/integrity/evm/evm_xattrs
+	done
+fi
+
+expect_pass check_lsm_xattrs sha1 ext4
+cleanup_lsm_xattrs
+expect_pass check_evm_hmac sha1 ext4
+cleanup_evm_hmac
+
+function reiserfs_setup {
+	if [ -z "$(command -v mkfs.reiserfs 2> /dev/null)" ] ||
+	   [ "${LSM_LIST/testlsm-xattr-bug/}" != "$LSM_LIST" ]; then
+		return "$OK"
+	fi
+
+	g_mountpoint2="$(mktemp -d)"
+	g_image2="$(mktemp)"
+
+	if ! dd if=/dev/zero of="$g_image2" bs=1M count=50 &> /dev/null; then
+		echo "${RED}Cannot create test image${NORM}"
+		return "$FAIL"
+	fi
+
+	g_dev2="$(losetup -f "$g_image2" --show)"
+	if [ -z "$g_dev2" ]; then
+		echo "${RED}Cannot create loop device${NORM}"
+		return "$FAIL"
+	fi
+
+	if ! mkfs.reiserfs -u "$IMA_UUID2" -b 4096 -q "$g_dev2" &> /dev/null; then
+		echo "${RED}Cannot format $g_dev2${NORM}"
+		return "$FAIL"
+	fi
+
+	if ! mount "$g_dev2" "$g_mountpoint2" 2> /dev/null; then
+		echo "${RED}Cannot mount loop device${NORM}"
+		return "$FAIL"
+	fi
+
+	g_loop2_mounted=1
+	chmod 777 "$g_mountpoint2"
+	pushd "$g_mountpoint2" > /dev/null || exit "$FAIL"
+	return "$OK"
+}
+
+expect_pass reiserfs_setup
+expect_pass check_lsm_xattrs sha1 reiserfs
+cleanup_lsm_xattrs
+
+function ocfs2_setup {
+	if [ -z "$(command -v mkfs.ocfs2 2> /dev/null)" ]; then
+		return "$OK"
+	fi
+
+	g_mountpoint3="$(mktemp -d)"
+	g_image3="$(mktemp)"
+
+	if ! dd if=/dev/zero of="$g_image3" bs=1M count=50 &> /dev/null; then
+		echo "${RED}Cannot create test image${NORM}"
+		return "$FAIL"
+	fi
+
+	g_dev3="$(losetup -f "$g_image3" --show)"
+	if [ -z "$g_dev3" ]; then
+		echo "${RED}Cannot create loop device${NORM}"
+		return "$FAIL"
+	fi
+
+	if ! mkfs.ocfs2 -U "$IMA_UUID3" -b 4096 --cluster-stack=o2cb --cluster-name=ocfs2 "$g_dev3" &> /dev/null; then
+		echo "${RED}Cannot format $g_dev3${NORM}"
+		return "$FAIL"
+	fi
+
+	hostname linux-uml
+
+	if ! ip link set dev lo up; then
+		echo "${RED}Failed to set IP address${NORM}"
+		return "$FAIL"
+	fi
+
+	O2CB="/usr/lib/ocfs2-tools/o2cb"
+	O2CB_ARG="start"
+	if [ ! -f "$O2CB" ]; then
+		O2CB="/usr/sbin/o2cb.init"
+		O2CB_ARG="enable"
+	fi
+
+	if ! "$O2CB" "$O2CB_ARG" &> /dev/null; then
+		echo "${RED}Failed to start $O2CB${NORM}"
+		return "$FAIL"
+	fi
+
+	if ! mount "$g_dev3" "$g_mountpoint3"; then
+		echo "${RED}Cannot mount loop device${NORM}"
+		return "$FAIL"
+	fi
+
+	g_loop3_mounted=1
+	chmod 777 "$g_mountpoint3"
+	pushd "$g_mountpoint3" > /dev/null || exit "$FAIL"
+	return "$OK"
+}
+
+expect_pass ocfs2_setup
+expect_pass check_lsm_xattrs sha1 ocfs2
+cleanup_lsm_xattrs

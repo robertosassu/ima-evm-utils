@@ -396,6 +396,8 @@ _init_env() {
   mount -t proc proc /proc
   mount -t sysfs sysfs /sys
   mount -t securityfs securityfs /sys/kernel/security
+  mount -t configfs configfs /sys/kernel/config
+  mount -t debugfs nodev /sys/kernel/debug
 
   if [ -n "$(command -v haveged 2> /dev/null)" ]; then
     $(command -v haveged) -w 1024 &> /dev/null
@@ -418,6 +420,8 @@ _cleanup_env() {
   $1
 
   umount /sys/kernel/security
+  umount /sys/kernel/config
+  umount /sys/kernel/debug
   umount /sys
   umount /proc
   umount /tmp

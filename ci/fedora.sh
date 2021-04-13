@@ -50,7 +50,11 @@ yum -y install \
 	keyutils \
 	e2fsprogs \
 	acl \
-	libcap
+	libcap \
+	ocfs2-tools \
+	initscripts \
+	hostname \
+	iproute
 
 yum -y install docbook5-style-xsl || true
 yum -y install swtpm || true
@@ -66,3 +70,20 @@ yum -y install haveged || true
 
 ./tests/install-fsverity.sh
 ./tests/install-mount-idmapped.sh
+
+yum -y install https://ftp-stud.hs-esslingen.de/pub/Mirrors/archive.fedoraproject.org/fedora/linux/releases/30/Everything/x86_64/os/Packages/r/reiserfs-utils-3.6.25-5.fc28.x86_64.rpm
+
+mkdir -p /etc/ocfs2
+
+cat >/etc/ocfs2/cluster.conf <<EOF
+cluster:
+	node_count = 1
+	name = ocfs2
+
+node:
+	ip_port = 7777
+	ip_address = 127.0.0.1
+	number = 0
+	name = linux-uml
+	cluster = ocfs2
+EOF
