@@ -196,6 +196,7 @@ struct libimaevm_params {
 	const char *hash_algo;
 	const char *keyfile;
 	const char *keypass;
+	const char *hmackeyfile;
 };
 
 struct RSA_ASN1_template {
