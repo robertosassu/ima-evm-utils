@@ -119,6 +119,11 @@ if [ $ret -eq 0 ]; then
 		grep "skipped" tests/portable_signatures.log  && \
 		   grep "skipped" tests/portable_signatures.log | wc -l
 	fi
+	if [ -f tests/evm_multiple_lsms.log ]; then
+		[ -n "$CI" ] && cat tests/evm_multiple_lsms.log || tail tests/evm_multiple_lsms.log
+		grep "skipped" tests/evm_multiple_lsms.log  && \
+		   grep "skipped" tests/evm_multiple_lsms.log | wc -l
+	fi
 	exit 0
 fi
 
