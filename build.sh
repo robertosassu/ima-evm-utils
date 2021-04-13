@@ -62,7 +62,7 @@ echo "PREFIX: '$PREFIX'"
 
 title "configure"
 ./autogen.sh
-./configure --prefix=$PREFIX $host || log_exit config.log "configure failed"
+./configure --prefix=$PREFIX --enable-debug $host || log_exit config.log "configure failed"
 
 title "make"
 make -j$(nproc)
