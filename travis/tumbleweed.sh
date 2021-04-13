@@ -47,7 +47,8 @@ zypper --non-interactive install --force-resolution --no-recommends \
 	keyutils \
 	acl \
 	audit \
-	libcap-progs
+	libcap-progs \
+	reiserfs
 
 if [ -f /usr/lib/ibmtss/tpm_server ]; then
 	ln -s /usr/lib/ibmtss/tpm_server /usr/local/bin
