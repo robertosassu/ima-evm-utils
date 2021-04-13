@@ -1348,7 +1348,8 @@ static int cmd_hmac_evm(struct command *cmd)
 			return err;
 	}
 
-	return hmac_evm(file, "/etc/keys/evm-key-plain");
+	return hmac_evm(file, imaevm_params.hmackeyfile ? :
+			"/etc/keys/evm-key-plain");
 }
 
 static int ima_fix(const char *path)
@@ -2666,6 +2667,7 @@ static struct option opts[] = {
 	{"keyid", 1, 0, 144},
 	{"keyid-from-cert", 1, 0, 145},
 	{"kernel-xattr-list", 0, 0, 146},
+	{"hmackey", 1, 0, 147},
 	{}
 
 };
@@ -2898,6 +2900,9 @@ int main(int argc, char *argv[])
 			break;
 		case 146:
 			init_xattrnames();
+			break;
+		case 147:
+			imaevm_params.hmackeyfile = optarg;
 			break;
 		case '?':
 			exit(1);
