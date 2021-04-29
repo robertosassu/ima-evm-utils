@@ -32,7 +32,7 @@ matrix:
 
         # glibc (gcc/clang)
         - os: linux
-          env: DISTRO=opensuse/tumbleweed TSS=ibmtss CONTAINER=podman CONTAINER_ARGS="--runtime=/usr/bin/runc --network=host"
+          env: DISTRO=opensuse/tumbleweed TSS=ibmtss CONTAINER=podman
           compiler: clang
 
         - os: linux
@@ -48,7 +48,7 @@ matrix:
           compiler: clang
 
         - os: linux
-          env: DISTRO=fedora:latest TSS=ibmtss
+          env: DISTRO=fedora:latest TSS=ibmtss CONTAINER=podman
           compiler: clang
 
         - os: linux
@@ -73,6 +73,7 @@ before_install:
     - >
         if [ "$CONTAINER" = "podman" ]; then
             # podman
+            CONTAINER_ARGS="--runtime=/usr/bin/runc --network=host"
             . /etc/os-release
             sudo sh -c "echo 'deb http://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/xUbuntu_${VERSION_ID}/ /' > /etc/apt/sources.list.d/devel:kubic:libcontainers:stable.list"
             wget -nv https://download.opensuse.org/repositories/devel:kubic:libcontainers:stable/xUbuntu_${VERSION_ID}/Release.key -O- | sudo apt-key add -
