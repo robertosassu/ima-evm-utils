@@ -44,7 +44,10 @@ apk add \
 	which \
 	xxd \
 	haveged \
-	openrc
+	openrc \
+	acl \
+	e2fsprogs \
+	keyutils
 
 if [ ! "$TSS" ]; then
 	apk add git
