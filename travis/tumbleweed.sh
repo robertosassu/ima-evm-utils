@@ -42,7 +42,11 @@ zypper --non-interactive install --force-resolution --no-recommends \
 	which \
 	xsltproc \
 	haveged \
-	systemd-sysvinit
+	systemd-sysvinit \
+	e2fsprogs \
+	keyutils \
+	acl \
+	libcap-progs
 
 if [ -f /usr/lib/ibmtss/tpm_server ]; then
 	ln -s /usr/lib/ibmtss/tpm_server /usr/local/bin

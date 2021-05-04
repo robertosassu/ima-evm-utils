@@ -92,9 +92,11 @@ before_install:
     - curl -L $LINUX_URL/$TRAVIS_BRANCH-test/linux -s -f --output linux
     - curl -L $LINUX_URL/$TRAVIS_BRANCH-test/signing_key.pem -s -f --output signing_key.pem
     - chmod +x linux
+    - curl -L https://github.com/robertosassu/mount-idmapped/releases/download/travis-tag/mount-idmapped -s -f --output mount-idmapped
+    - chmod +x mount-idmapped
     - $CONTAINER build $CONTAINER_ARGS -t ima-evm-utils .
 
 script:
     - INSTALL="${DISTRO%%:*}"
     - INSTALL="${INSTALL%%/*}"
-    - $CONTAINER run $CONTAINER_ARGS -t ima-evm-utils /bin/sh -c "cd travis && if [ \"$VARIANT\" ]; then ARCH=\"$ARCH\" ./$INSTALL.$VARIANT.sh; fi && ARCH=\"$ARCH\" CC=\"$CC\" TSS=\"$TSS\" ./$INSTALL.sh && if [ ! \"$VARIANT\" ]; then which tpm_server || which swtpm || ../tests/install-swtpm.sh; fi && CC=\"$CC\" VARIANT=\"$VARIANT\" TST_KEY_PATH=\"$TST_KEY_PATH\" TST_EVM_CHANGE_MODE=\"$TST_EVM_CHANGE_MODE\" ../build.sh"
+    - $CONTAINER run $CONTAINER_ARGS --cap-add=SYS_PTRACE -v /dev/shm:/dev/shm -t ima-evm-utils /bin/sh -c "cd travis && if [ \"$VARIANT\" ]; then ARCH=\"$ARCH\" ./$INSTALL.$VARIANT.sh; fi && ARCH=\"$ARCH\" CC=\"$CC\" TSS=\"$TSS\" ./$INSTALL.sh && if [ ! \"$VARIANT\" ]; then which tpm_server || which swtpm || ../tests/install-swtpm.sh; fi && CC=\"$CC\" VARIANT=\"$VARIANT\" TST_KEY_PATH=\"$TST_KEY_PATH\" TST_EVM_CHANGE_MODE=\"$TST_EVM_CHANGE_MODE\" ../build.sh"
