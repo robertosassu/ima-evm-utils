@@ -43,7 +43,11 @@ zypper --non-interactive install --force-resolution --no-recommends \
 	xsltproc \
 	curl \
 	haveged \
-	systemd-sysvinit
+	systemd-sysvinit \
+	e2fsprogs \
+	keyutils \
+	acl \
+	libcap-progs
 
 zypper --non-interactive install --force-resolution --no-recommends \
 	gnutls openssl-engine-libp11 softhsm || true

@@ -90,6 +90,7 @@ if [ $ret -eq 0 ]; then
 		   grep "skipped" tests/sign_verify.log | wc -l
 	fi
 	tail -20 tests/boot_aggregate.log
+	tail -100 tests/portable_signatures.log
 	exit 0
 fi
 

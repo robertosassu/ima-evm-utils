@@ -43,7 +43,11 @@ yum -y install \
 	which \
 	curl \
 	haveged \
-	systemd
+	systemd \
+	keyutils \
+	e2fsprogs \
+	acl \
+	libcap
 
 yum -y install docbook5-style-xsl || true
 yum -y install swtpm || true
