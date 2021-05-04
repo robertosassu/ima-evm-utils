@@ -42,7 +42,8 @@ apk add \
 	sudo \
 	wget \
 	which \
-	xxd
+	xxd \
+	curl
 
 if [ ! "$TSS" ]; then
 	apk add git

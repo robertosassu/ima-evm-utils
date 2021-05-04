@@ -87,11 +87,23 @@ before_install:
             sudo curl -L https://github.com/opencontainers/runc/releases/download/v1.0.0-rc93/runc.amd64 -o /usr/bin/runc
             sudo chmod +x /usr/bin/runc
         fi
+    - asset_name_suffix=$DISTRO
+    - asset_name_suffix="$(echo $asset_name_suffix | sed 's/[:\/]/./')"
+    - >
+        if [ -n "$ARCH" ]; then
+          asset_name_suffix="$asset_name_suffix.$ARCH"
+        fi
     - $CONTAINER info
 
     - DIR="/usr/src/ima-evm-utils"
     - printf "FROM $DISTRO\nRUN mkdir -p $DIR\nWORKDIR $DIR\nCOPY . $DIR\n" > Dockerfile
     - cat Dockerfile
+    - curl -L $LINUX_URL/$TRAVIS_BRANCH-test/linux-$asset_name_suffix -s -f --output linux || echo
+    - curl -L $LINUX_URL/$TRAVIS_BRANCH-test/signing_key.pem-$asset_name_suffix -s -f --output signing_key.pem || echo
+    - >
+        if [ -f "linux" ]; then
+                chmod +x linux
+        fi
     - $CONTAINER build $CONTAINER_ARGS -t ima-evm-utils .
 
 script:
