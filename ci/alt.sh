@@ -26,4 +26,5 @@ apt-get install -y \
 		wget \
 		xsltproc \
 		xxd \
+		curl \
 	&& control openssl-gost enabled

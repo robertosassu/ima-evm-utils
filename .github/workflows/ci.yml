@@ -100,6 +100,9 @@ jobs:
       env: ${{ matrix.env }}
       options: --security-opt seccomp=unconfined --privileged --device /dev/loop-control --device /dev/loop3
 
+    environment:
+      name: test
+
     steps:
     - name: Show OS
       run: cat /etc/os-release
@@ -123,6 +126,19 @@ jobs:
             if which tssstartup; then
               ./tests/install-swtpm.sh;
             fi
+        fi
+
+    - name: Download UML kernel and signing key
+      run: |
+        asset_name_suffix=${{ matrix.container }}
+        asset_name_suffix="$(echo $asset_name_suffix | sed 's/[:\/]/./')"
+        if [ -n "$ARCH" ]; then
+          asset_name_suffix="$asset_name_suffix.$ARCH"
+        fi
+        curl -L ${{ secrets.LINUX_URL }}/${GITHUB_REF##*/}-test/linux-$asset_name_suffix -s -f --output linux || echo
+        curl -L ${{ secrets.LINUX_URL }}/${GITHUB_REF##*/}-test/signing_key.pem-$asset_name_suffix -s -f --output signing_key.pem || echo
+        if [ -f linux ]; then
+                chmod +x linux
         fi
 
     - name: Compiler version

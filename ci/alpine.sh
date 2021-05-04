@@ -45,7 +45,8 @@ apk add \
 	util-linux \
 	wget \
 	which \
-	xxd
+	xxd \
+	curl
 
 if [ ! "$TSS" ]; then
 	apk add git

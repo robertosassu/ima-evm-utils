@@ -54,6 +54,8 @@ $apt \
 	util-linux \
 	wget \
 	xsltproc
+	curl \
+	ca-certificates
 
 $apt xxd || $apt vim-common
 $apt libengine-gost-openssl1.1$ARCH || true
