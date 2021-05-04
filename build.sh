@@ -111,6 +111,8 @@ if [ $ret -eq 0 ]; then
 		cat tests/fsverity.log
 		echo ================================= tests/fsverity.log = end
 	fi
+
+	tail -100 tests/portable_signatures.log
 	exit 0
 fi
 
