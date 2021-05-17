@@ -124,6 +124,8 @@ static char *generation_str;
 static char *caps_str;
 static char *ima_str;
 static char *selinux_str;
+static char *mntuidmap_str;
+static char *mntgidmap_str;
 static char *search_type;
 static int verify_list_sig;
 static int recursive;
@@ -359,8 +361,32 @@ static int calc_evm_hash(const char *file, unsigned char *hash)
 		st.st_ino = strtoul(ino_str, NULL, 10);
 	if (uid_str)
 		st.st_uid = strtoul(uid_str, NULL, 10);
+	if (mntuidmap_str) {
+		unsigned int first, lower_first, count;
+
+		first = strtol(mntuidmap_str, &mntuidmap_str, 10);
+		mntuidmap_str++;
+		lower_first = strtol(mntuidmap_str, &mntuidmap_str, 10);
+		mntuidmap_str++;
+		count = strtol(mntuidmap_str, &mntuidmap_str, 10);
+
+		if (st.st_uid - lower_first >= first && st.st_uid - lower_first < first + count)
+			st.st_uid -= lower_first;
+	}
 	if (gid_str)
 		st.st_gid = strtoul(gid_str, NULL, 10);
+	if (mntgidmap_str) {
+		unsigned int first, lower_first, count;
+
+		first = strtol(mntgidmap_str, &mntgidmap_str, 10);
+		mntgidmap_str++;
+		lower_first = strtol(mntgidmap_str, &mntgidmap_str, 10);
+		mntgidmap_str++;
+		count = strtol(mntgidmap_str, &mntgidmap_str, 10);
+
+		if (st.st_gid - lower_first >= first && st.st_gid - lower_first < first + count)
+			st.st_gid -= lower_first;
+	}
 	if (mode_str)
 		st.st_mode = strtoul(mode_str, NULL, 10);
 
@@ -2485,6 +2511,8 @@ static void usage(void)
 		"      --generation   use custom Generation for EVM(unspecified: from FS, empty: use 0)\n"
 		"      --ima          use custom IMA signature for EVM\n"
 		"      --selinux      use custom Selinux label for EVM\n"
+		"      --mntuidmap    use custom UID mapping for EVM\n"
+		"      --mntgidmap    use custom GID mapping for EVM\n"
 		"      --caps         use custom Capabilities for EVM(unspecified: from FS, empty: do not use)\n"
 		"      --verify-sig   verify measurement list signatures\n"
 		"      --engine e     preload OpenSSL engine e (such as: gost)\n"
@@ -2546,8 +2574,9 @@ static struct option opts[] = {
 	{"xattr-user", 0, 0, 140},
 	{"ignore-violations", 0, 0, 141},
 	{"pcrs", 1, 0, 142},
+	{"mntuidmap", 1, 0, 143},
+	{"mntgidmap", 1, 0, 144},
 	{}
-
 };
 
 static char *get_password(void)
@@ -2733,6 +2762,12 @@ int main(int argc, char *argv[])
 				exit(1);
 			}
 			pcrfile[npcrfile++] = optarg;
+			break;
+		case 143:
+			mntuidmap_str = optarg;
+			break;
+		case 144:
+			mntgidmap_str = optarg;
 			break;
 		case '?':
 			exit(1);
