@@ -1,0 +1,421 @@
+#!/bin/bash
+
+#
+# Check if information in the measurement list can be used to verify portable signatures.
+
+trap cleanup SIGINT SIGTERM SIGSEGV EXIT
+
+# Base VERBOSE on the environment variable, if set.
+VERBOSE="${VERBOSE:-0}"
+TST_EVM_CHANGE_MODE="${TST_EVM_CHANGE_MODE:-0}"
+TST_IMA_CANONICAL_FMT="${TST_IMA_CANONICAL_FMT:-0}"
+
+# From security/integrity/evm/evm.h in kernel source directory.
+let "EVM_INIT_HMAC=0x0001"
+let "EVM_INIT_X509=0x0002"
+let "EVM_ALLOW_METADATA_WRITES=0x0004"
+let "EVM_SETUP_COMPLETE=-0x80000000"
+
+big_endian=0
+
+cd "$(dirname "$0")"
+export PATH=$PWD/../src:$PATH
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH
+. ./functions.sh
+_require evmctl
+
+cleanup() {
+	if [ "$loop_mounted" = "1" ]; then
+		popd > /dev/null
+
+		if [ -n "$mountpoint_idmapped" ]; then
+			umount $mountpoint_idmapped
+		fi
+
+		umount $mountpoint
+	fi
+
+	if [ -n "$dev" ]; then
+		losetup -d $dev
+	fi
+
+	rm -f $image
+	rm -f $key_path_der
+	rm -Rf $mountpoint
+
+	if [ -n "$mountpoint_idmapped" ]; then
+		rm -Rf $mountpoint_idmapped
+	fi
+
+	_cleanup_user_mode
+	_report_exit
+}
+
+get_xattr() {
+	format="hex"
+
+	if [ "$1" = "security.selinux" ]; then
+		format="text"
+	fi
+
+	getfattr -n $1 -e $format -d $2 2> /dev/null | awk -F "=" '$1 == "'$1'" {if ("'$format'" == "hex") v=substr($2, 3); else { split($2, temp, "\""); v=temp[2] }; print v}'
+}
+
+IMA_UUID="28b23254-9467-44c0-b6ba-34b12e85a26e"
+MEASURE_FOWNER=2000
+MEASURE_RULE="measure fsuuid=$IMA_UUID fowner=$MEASURE_FOWNER"
+MEASURE_FOWNER_IDMAPPED=4000
+MEASURE_RULE_IDMAPPED="measure fowner=$MEASURE_FOWNER_IDMAPPED"
+
+check_load_ima_rule() {
+	rule_loaded=$(cat /sys/kernel/security/ima/policy | grep "$1")
+	if [ -z "$rule_loaded" ]; then
+		new_policy=$(mktemp -p $mountpoint)
+		echo $1 > $new_policy
+		evmctl sign -o -a sha256 --imasig --key $key_path $new_policy &> /dev/null
+		echo $new_policy > /sys/kernel/security/ima/policy
+		result=$?
+		rm -f $new_policy
+
+		if [ $result -ne 0 ]; then
+			echo "${RED}Failed to set IMA policy${NORM}"
+			return $FAIL
+		fi
+	fi
+
+	return $OK
+}
+
+# The purpose of this test is to verify that the patch 'ima: Allow imasig
+# requirement to be satisfied by EVM portable signatures' didn't break the
+# current behavior (IMA signatures still satisfy the imasig requirement).
+check_evmsig() {
+	echo "Test: ${FUNCNAME[0]} (evm_value: $evm_value, idmapped mount: $1)"
+
+	if [ $((evm_value & EVM_INIT_X509)) -eq 0 ]; then
+		echo "${CYAN}EVM mode $EVM_INIT_X509 required${NORM}"
+		return $SKIP
+	fi
+
+	echo "test" > test-file
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot write test-file${NORM}"
+		return $FAIL
+	fi
+
+	# Create a new file and set metadata from measurement list.
+	echo "test" > test-file-verify
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot write test-file-verify${NORM}"
+		return $FAIL
+	fi
+
+	setfattr -n security.selinux -v "unconfined_u:object_r:admin_home_t:s0\0" test-file
+	setfattr -n security.SMACK64 -v "_\0" test-file
+
+	evmctl sign -o -a sha256 --imahash --uid $MEASURE_FOWNER --key $key_path test-file &> /dev/null
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot sign test-file${NORM}"
+		return $FAIL
+	fi
+
+	# Change the owner after signing, otherwise an existing IMA rule might
+	# prevent evmctl from reading the file.
+	chown $MEASURE_FOWNER test-file
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot change owner of test-file${NORM}"
+		return $FAIL
+	fi
+
+	check_load_ima_rule "$MEASURE_RULE"
+	result=$?
+	if [ $result -ne $OK ]; then
+		return $result
+	fi
+
+	check_load_ima_rule "$MEASURE_RULE_IDMAPPED"
+	result=$?
+	if [ $result -ne $OK ]; then
+		return $result
+	fi
+
+	if [ $1 -eq 1 ]; then
+		pushd $mountpoint_idmapped > /dev/null
+	fi
+
+	# Measure test-file.
+	cat test-file > /dev/null
+	result=$?
+
+	if [ $1 -eq 1 ]; then
+		popd > /dev/null
+	fi
+
+	if [ $result -ne 0 ]; then
+		echo "${RED}Cannot read test-file${NORM}"
+
+		return $FAIL
+	fi
+
+	evm_sig_fs=$(get_xattr security.evm test-file)
+	if [ -z "$evm_sig_fs" ]; then
+		echo "${RED}security.evm not found${NORM}"
+		return $FAIL
+	fi
+
+	# Search security.evm in the measurement list.
+	evm_sig_list="$(cat /sys/kernel/security/ima/ascii_runtime_measurements | awk '$6 == "'$evm_sig_fs'" {print $7, $8, $9, $10, $11, $12}' | tail -n 1)"
+	if [ -z "$evm_sig_list" ]; then
+		echo "${RED}security.evm mismatch (xattr != measurement list)${NORM}"
+		return $FAIL
+	fi
+
+	read xattrs iuid igid imode mntuidmap mntgidmap<<<$(echo $evm_sig_list)
+
+	imode=$(printf '%o' $imode | tail -c 4)
+
+	setfattr -n security.evm -v 0x$evm_sig_fs test-file-verify
+	chown $iuid:$igid test-file-verify
+	chmod $imode test-file-verify
+
+	num_xattrs=${xattrs:0:8}
+	if [ $big_endian -eq 0 ]; then
+		num_xattrs=$(echo -n $num_xattrs | tac -rs ..)
+	fi
+
+	num_xattrs=$((16#$num_xattrs))
+	pos=8
+
+	declare -a xattr_name
+	declare -a xattr_value_len
+
+	i=0
+	while [ $i -lt $num_xattrs ]; do
+		xattr_name[i]=$(echo ${xattrs:$pos} | awk -F "" '{for (i=1;i<=NF;i+=2) {if ($i != "0" && $(i+1) != "0") printf("%s%s", $i, $(i+1)); else exit}}' | xxd -r -p)
+		((pos+=${#xattr_name[i]} * 2 + 2))
+		((i++))
+	done
+
+	i=0
+	while [ $i -lt $num_xattrs ]; do
+		xattr_value_len[i]=${xattrs:$pos:8}
+		if [ $big_endian -eq 0 ]; then
+			xattr_value_len[i]=$(echo -n ${xattr_value_len[i]} | tac -rs ..)
+		fi
+
+		xattr_value_len[i]=$((16#${xattr_value_len[i]}))
+		((pos+=8))
+		((i++))
+	done
+
+	i=0
+	while [ $i -lt $num_xattrs ]; do
+		setfattr -n ${xattr_name[i]} -v 0x${xattrs:$pos:$((${xattr_value_len[i]} * 2))} test-file-verify
+		((pos+=${xattr_value_len[i]} * 2))
+		((i++))
+	done
+
+	if [ -n "$mntuidmap" ]; then
+		num_extents=${mntuidmap:0:8}
+		if [ $big_endian -eq 0 ]; then
+			num_extents=$(echo -n $num_extents | tac -rs ..)
+		fi
+
+		num_extents=$((16#$num_extents))
+		pos=8
+
+		i=0
+		while [ $i -lt $num_extents ]; do
+			first=${mntuidmap:pos:8}
+			if [ $big_endian -eq 0 ]; then
+				first=$(echo -n $first | tac -rs ..)
+			fi
+
+			first=$((16#$first))
+			((pos+=8))
+
+			lower_first=${mntuidmap:pos:8}
+			if [ $big_endian -eq 0 ]; then
+				lower_first=$(echo -n $lower_first | tac -rs ..)
+			fi
+
+			lower_first=$((16#$lower_first))
+			((pos+=8))
+
+			count=${mntuidmap:pos:8}
+			if [ $big_endian -eq 0 ]; then
+				count=$(echo -n $count | tac -rs ..)
+			fi
+
+			count=$((16#$count))
+			((pos+=8))
+
+			uidopts="--mntuidmap $first:$lower_first:$count --uid $iuid"
+			((i++))
+		done
+	fi
+
+	if [ -n "$mntgidmap" ]; then
+		num_extents=${mntgidmap:0:8}
+		if [ $big_endian -eq 0 ]; then
+			num_extents=$(echo -n $num_extents | tac -rs ..)
+		fi
+
+		num_extents=$((16#$num_extents))
+		pos=8
+
+		i=0
+		while [ $i -lt $num_extents ]; do
+			first=${mntgidmap:pos:8}
+			if [ $big_endian -eq 0 ]; then
+				first=$(echo -n $first | tac -rs ..)
+			fi
+
+			first=$((16#$first))
+			((pos+=8))
+
+			lower_first=${mntgidmap:pos:8}
+			if [ $big_endian -eq 0 ]; then
+				lower_first=$(echo -n $lower_first | tac -rs ..)
+			fi
+
+			lower_first=$((16#$lower_first))
+			((pos+=8))
+
+			count=${mntgidmap:pos:8}
+			if [ $big_endian -eq 0 ]; then
+				count=$(echo -n $count | tac -rs ..)
+			fi
+
+			count=$((16#$count))
+			((pos+=8))
+
+			gidopts="--mntgidmap $first:$lower_first:$count --gid $igid"
+			((i++))
+		done
+	fi
+
+	evmctl verify -o -a sha256 --key $key_path_der $uidopts $gidopts test-file-verify &> /dev/null
+	if [ $? -ne 0 ]; then
+		echo "${RED}test-file-verify verification failed${NORM}"
+		return $FAIL
+	fi
+	
+	return $OK
+}
+
+cleanup_evmsig() {
+	rm -f test-file test-file-verify
+}
+
+# Run in User Mode Linux.
+_run_user_mode ../linux $PWD/$(basename $0) "PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH VERBOSE=$VERBOSE TST_EVM_CHANGE_MODE=$TST_EVM_CHANGE_MODE TST_KEY_PATH=$TST_KEY_PATH ima_template_fmt=\"d-ng|n-ng|sig|evmxattrs|iuid|igid|imode|mntuidmap|mntgidmap\""
+
+# Exit from the parent if UML was used.
+_exit_user_mode ../linux
+
+# Mount filesystems in UML environment.
+_init_user_mode
+
+mountpoint=$(mktemp -d)
+image=$(mktemp)
+
+if [ -z "$mountpoint" ]; then
+	echo "${RED}Mountpoint directory not created${NORM}"
+	exit $FAIL
+fi
+
+if [ $(whoami) != "root" ]; then
+	echo "${CYAN}This script must be executed as root${NORM}"
+	exit $SKIP
+fi
+
+key_path="/lib/modules/$(uname -r)/source/certs/signing_key.pem"
+if [ -n "$TST_KEY_PATH" ]; then
+	key_path=$TST_KEY_PATH
+fi
+
+if [ ${key_path:0:1} != "/" ]; then
+	echo "${RED}Absolute path required for the signing key${NORM}"
+	exit $FAIL
+fi
+
+key_path_der=$(mktemp)
+
+if [ ! -f $key_path ]; then
+	echo "${CYAN}Kernel signing key not found in $key_path${NORM}"
+	exit $SKIP
+fi
+
+if [ ! -f "/sys/kernel/security/evm" ]; then
+	echo "${CYAN}EVM support in the kernel disabled${NORM}"
+	exit $SKIP
+fi
+
+evm_value=$(cat /sys/kernel/security/evm)
+
+openssl x509 -in $key_path -out $key_path_der -outform der
+cat $key_path_der | keyctl padd asymmetric pubkey %keyring:.ima &> /dev/null
+
+dd if=/dev/zero of=$image bs=1M count=20 &> /dev/null
+if [ $? -ne 0 ]; then
+	echo "${RED}Cannot create test image${NORM}"
+	exit $FAIL
+fi
+
+dev=$(losetup -f $image --show)
+if [ -z "$dev" ]; then
+	echo "${RED}Cannot create loop device${NORM}"
+	exit $FAIL
+fi
+
+mkfs.ext4 -U $IMA_UUID -b 4096 $dev &> /dev/null
+if [ $? -ne 0 ]; then
+	echo "${RED}Cannot format $dev${NORM}"
+	exit $FAIL
+fi
+
+mount -o i_version $dev $mountpoint
+if [ $? -ne 0 ]; then
+	echo "${RED}Cannot mount loop device${NORM}"
+	exit $FAIL
+fi
+
+if [ -f ../mount-idmapped ]; then
+	mountpoint_idmapped=$(mktemp -d)
+	../mount-idmapped --map-mount b:0:$MEASURE_FOWNER:$((MEASURE_FOWNER + 1)) $mountpoint $mountpoint_idmapped
+	if [ $? -ne 0 ]; then
+		echo "${RED}mount-idmapped failed${NORM}"
+		exit $FAIL
+	fi
+fi
+
+loop_mounted=1
+
+if [ $TST_IMA_CANONICAL_FMT -eq 0 ]; then
+	if [ $(printf '\1' | od -dAn) -eq 256 ]; then
+		big_endian=1
+	fi
+fi
+
+if [ $(echo -e "$(uname -r)\n5.12" | sort -V | head -n 1) != "5.12" ]; then
+	exit $OK
+fi
+
+if [ $((evm_value & EVM_INIT_X509)) -ne $EVM_INIT_X509 ] && [ "$TST_EVM_CHANGE_MODE" -eq 1 ]; then
+	cat $key_path_der | keyctl padd asymmetric pubkey %keyring:.evm &> /dev/null
+	echo $EVM_INIT_X509 > /sys/kernel/security/evm 2> /dev/null
+fi
+
+# We cannot determine from securityfs if EVM_SETUP_COMPLETE is set, so we set it unless EVM_ALLOW_METADATA_WRITES is set.
+if [ $((evm_value & EVM_ALLOW_METADATA_WRITES)) -ne $EVM_ALLOW_METADATA_WRITES ] && [ "$TST_EVM_CHANGE_MODE" -eq 1 ]; then
+	echo $EVM_SETUP_COMPLETE > /sys/kernel/security/evm 2> /dev/null
+fi
+
+evm_value=$(cat /sys/kernel/security/evm)
+
+pushd $mountpoint > /dev/null
+expect_pass check_evmsig 0
+cleanup_evmsig
+expect_pass check_evmsig 1
+cleanup_evmsig
