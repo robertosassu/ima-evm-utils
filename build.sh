@@ -84,6 +84,7 @@ if [ $ret -eq 0 ]; then
 	tail -20 tests/boot_aggregate.log
 	tail -100 tests/portable_signatures.log
 	tail -100 tests/verify_evmsig.log
+	tail -100 tests/evm_hmac_non_enabled_xattrs.log
 	exit 0
 fi
 
