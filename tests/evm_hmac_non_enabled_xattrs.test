@@ -1,0 +1,214 @@
+#!/bin/bash
+
+#
+# Check if the HMAC changes on a setxattr operation with a non-enabled xattr
+
+trap cleanup SIGINT SIGTERM SIGSEGV EXIT
+
+# Base VERBOSE on the environment variable, if set.
+VERBOSE="${VERBOSE:-0}"
+TST_EVM_CHANGE_MODE="${TST_EVM_CHANGE_MODE:-0}"
+
+# From security/integrity/evm/evm.h in kernel source directory
+let "EVM_INIT_HMAC=0x0001"
+let "EVM_INIT_X509=0x0002"
+let "EVM_ALLOW_METADATA_WRITES=0x0004"
+let "EVM_SETUP_COMPLETE=-0x80000000"
+
+cd "$(dirname "$0")"
+export PATH=$PWD/../src:$PATH
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH
+. ./functions.sh
+_require evmctl
+
+cleanup() {
+	if [ -n "$masterkey" ]; then
+		rm $masterkey
+	fi
+
+	if [ "$loop_mounted" = "1" ]; then
+		popd > /dev/null
+		umount $mountpoint
+	fi
+
+	if [ -n "$dev" ]; then
+		losetup -d $dev
+	fi
+
+	rm -f $image
+	rm -f $key_path_der
+	rm -Rf $mountpoint
+
+	_cleanup_user_mode
+	_report_exit
+}
+
+get_xattr() {
+	format="hex"
+
+	if [ "$1" = "security.selinux" ]; then
+		format="text"
+	fi
+
+	getfattr -n $1 -e $format -d $2 2> /dev/null | awk -F "=" '$1 == "'$1'" {if ("'$format'" == "hex") v=substr($2, 3); else { split($2, temp, "\""); v=temp[2] }; print v}'
+}
+
+IMA_UUID="28b23254-9467-44c0-b6ba-34b12e85a26d"
+APPRAISE_FOWNER=2000
+APPRAISE_RULE="appraise fsuuid=$IMA_UUID fowner=$APPRAISE_FOWNER"
+
+check_load_ima_rule() {
+	rule_loaded=$(cat /sys/kernel/security/ima/policy | grep "$1")
+	if [ -z "$rule_loaded" ]; then
+		new_policy=$(mktemp -p $mountpoint)
+		echo $1 > $new_policy
+
+		if [ -n "$TST_KEY_PATH" ]; then
+			evmctl sign -o -a sha256 --imasig --key $TST_KEY_PATH $new_policy &> /dev/null
+		fi
+
+		echo $new_policy > /sys/kernel/security/ima/policy
+		result=$?
+		rm -f $new_policy
+
+		if [ $result -ne 0 ]; then
+			echo "${RED}Failed to set IMA policy${NORM}"
+			return $FAIL
+		fi
+	fi
+
+	return $OK
+}
+
+# The purpose of this test is to verify that after applying the patch
+# 'evm: Verify portable signatures against all protected xattrs' setting a
+# non-enabled xattr does not change the HMAC.
+check_hmac_change() {
+	echo "Test: ${FUNCNAME[0]} (evm_hash=$1, evm_value: $evm_value)"
+
+	check_load_ima_rule "$APPRAISE_RULE"
+	result=$?
+	if [ $result -ne $OK ]; then
+		return $result
+	fi
+
+	capsh --uid=$APPRAISE_FOWNER -- -c 'touch test-file'
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot create test-file${NORM}"
+		return $FAIL
+	fi
+
+	# Append content to test-file.
+	echo "test" >> test-file
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot append content to test-file${NORM}"
+		return $FAIL
+	fi
+
+	xattr_list_selinux=$(cat /sys/kernel/security/integrity/evm/evm_xattrs | grep selinux)
+	if [ -n "$xattr_list_selinux" ]; then
+		echo "${RED}SELinux is enabled, the test cannot be performed${NORM}"
+		return $FAIL
+	fi
+
+	old_evm_xattr=$(get_xattr security.evm test-file)
+	setfattr -n security.selinux -v "unconfined_u:object_r:admin_home_t:s0\0" test-file
+	new_evm_xattr=$(get_xattr security.evm test-file)
+
+	if [ $new_evm_xattr != $old_evm_xattr ]; then
+		echo "${RED}Unexpected change of security.evm${NORM}"
+		return $FAIL
+	fi
+
+	# Check if appraisal works.
+	cat test-file > /dev/null
+	if [ $? -ne 0 ]; then
+		echo "${RED}Cannot read test-file${NORM}"
+		return $FAIL
+	fi
+
+	if [ $(get_xattr security.evm test-file | wc -c) != $(${1}sum test-file | awk '{printf("0x0%s", $1)}' | wc -c) ]; then
+		echo "${RED}Unexpected size of security.evm${NORM}"
+		return $FAIL
+	fi
+
+	return $OK
+}
+
+cleanup_hmac_change() {
+	rm -f test-file
+}
+
+# Run in User Mode Linux.
+_run_user_mode ../linux $PWD/$(basename $0) "PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH VERBOSE=$VERBOSE TST_EVM_CHANGE_MODE=$TST_EVM_CHANGE_MODE TST_KEY_PATH=$TST_KEY_PATH"
+
+# Exit from the parent if UML was used.
+_exit_user_mode ../linux
+
+# Mount filesystems in UML environment.
+_init_user_mode
+
+mountpoint=$(mktemp -d)
+image=$(mktemp)
+
+if [ -z "$mountpoint" ]; then
+	echo "${RED}Mountpoint directory not created${NORM}"
+	exit $FAIL
+fi
+
+if [ $(whoami) != "root" ]; then
+	echo "${CYAN}This script must be executed as root${NORM}"
+	exit $SKIP
+fi
+
+if [ ! -f "/sys/kernel/security/evm" ]; then
+	echo "${CYAN}EVM support in the kernel disabled${NORM}"
+	exit $SKIP
+fi
+
+dd if=/dev/zero of=$image bs=1M count=10 &> /dev/null
+if [ $? -ne 0 ]; then
+	echo "${RED}Cannot create test image${NORM}"
+	exit $FAIL
+fi
+
+dev=$(losetup -f $image --show)
+if [ -z "$dev" ]; then
+	echo "${RED}Cannot create loop device${NORM}"
+	exit $FAIL
+fi
+
+mkfs.ext4 -U $IMA_UUID -b 4096 $dev &> /dev/null
+if [ $? -ne 0 ]; then
+	echo "${RED}Cannot format $dev${NORM}"
+	exit $FAIL
+fi
+
+mount -o i_version $dev $mountpoint
+if [ $? -ne 0 ]; then
+	echo "${RED}Cannot mount loop device${NORM}"
+	exit $FAIL
+fi
+
+loop_mounted=1
+chmod 777 $mountpoint
+pushd $mountpoint > /dev/null
+
+evm_value=$(cat /sys/kernel/security/evm)
+
+if [ $((evm_value & EVM_INIT_HMAC)) -ne $EVM_INIT_HMAC ]; then
+	masterkey=$(mktemp)
+	dd if=/dev/zero of=$masterkey bs=32 count=1 &> /dev/null
+
+	user_id=$(cat $masterkey | keyctl padd user kmk @u)
+	evm_id=$(keyctl add encrypted evm-key "new user:kmk 32" @u)
+	echo $EVM_INIT_HMAC > /sys/kernel/security/evm
+
+	keyctl unlink $user_id
+	keyctl unlink $evm_id
+fi
+
+evm_value=$(cat /sys/kernel/security/evm)
+
+expect_pass check_hmac_change sha1
+cleanup_hmac_change
