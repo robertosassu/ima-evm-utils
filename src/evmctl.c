@@ -124,6 +124,7 @@ static char *generation_str;
 static char *caps_str;
 static char *ima_str;
 static char *selinux_str;
+static char *xattr_values_str;
 static char *search_type;
 static int verify_list_sig;
 static int recursive;
@@ -406,6 +407,9 @@ static int calc_evm_hash(const char *file, unsigned char *hash)
 	for (xattrname = evm_config_xattrnames; *xattrname != NULL; xattrname++) {
 		int use_xattr_ima = 0;
 
+		if (xattr_values_str)
+			break;
+
 		if (!strcmp(*xattrname, XATTR_NAME_SELINUX) && selinux_str) {
 			err = strlen(selinux_str) + 1;
 			if (err > sizeof(xattr_value)) {
@@ -463,6 +467,22 @@ static int calc_evm_hash(const char *file, unsigned char *hash)
 		}
 	}
 
+	if (xattr_values_str) {
+		err = strlen(xattr_values_str) / 2;
+		if (err > sizeof(xattr_value)) {
+			log_err("xattrs[%u] value is too long to fit into xattr[%zu]\n",
+				err, sizeof(xattr_value));
+			return -1;
+		}
+		hex2bin(xattr_value, xattr_values_str, err);
+		log_info("all xattrs, size: %d\n", err);
+		log_debug_dump(xattr_value, err);
+		err = EVP_DigestUpdate(pctx, xattr_value, err);
+		if (!err) {
+			log_err("EVP_DigestUpdate() failed\n");
+			return 1;
+		}
+	}
 	memset(&hmac_misc, 0, sizeof(hmac_misc));
 
 	if (evm_immutable) {
@@ -2489,6 +2509,7 @@ static void usage(void)
 		"      --verify-sig   verify measurement list signatures\n"
 		"      --engine e     preload OpenSSL engine e (such as: gost)\n"
 		"      --ignore-violations ignore ToMToU measurement violations\n"
+		"      --xattr-values use concatenated xattr values\n"
 		"  -v                 increase verbosity level\n"
 		"  -h, --help         display this help and exit\n"
 		"\n");
@@ -2546,6 +2567,7 @@ static struct option opts[] = {
 	{"xattr-user", 0, 0, 140},
 	{"ignore-violations", 0, 0, 141},
 	{"pcrs", 1, 0, 142},
+	{"xattr-values", 1, 0, 143},
 	{}
 
 };
@@ -2733,6 +2755,9 @@ int main(int argc, char *argv[])
 				exit(1);
 			}
 			pcrfile[npcrfile++] = optarg;
+			break;
+		case 143:
+			xattr_values_str = optarg;
 			break;
 		case '?':
 			exit(1);
