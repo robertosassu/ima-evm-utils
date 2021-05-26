@@ -263,6 +263,15 @@ static void bin2hex(uint8_t *buf, size_t buflen, FILE *stream)
 	}
 }
 
+static void bin2hex_str(char *dest, uint8_t *buf, size_t buflen)
+{
+	for (; buflen--; buf++) {
+		dest[0] = hex_asc_hi(*buf);
+		dest[1] = hex_asc_lo(*buf);
+		dest += 2;
+	}
+}
+
 static int pack_uuid(const char *uuid_str, char *uuid)
 {
 	int i;
@@ -556,6 +565,44 @@ static int calc_evm_hash(const char *file, unsigned char *hash)
 	}
 
 	return mdlen;
+}
+
+static int evm_verify_portable_signature(const char *file, unsigned char *sig,
+					 int siglen, unsigned char *digest,
+					 int digestlen)
+{
+	unsigned char hash[MAX_DIGEST_SIZE];
+	int hashlen, sig_hash_algo;
+	bool saved_evm_portable = evm_portable;
+
+	if (sig[0] != EVM_XATTR_PORTABLE_DIGSIG) {
+		log_err("%s: xattr ima has no signature\n", file);
+		return -1;
+	}
+
+	sig_hash_algo = imaevm_hash_algo_from_sig(sig + 1);
+	if (sig_hash_algo < 0) {
+		log_err("%s: Invalid signature\n", file);
+		return -1;
+	}
+	/* Use hash algorithm as retrieved from signature */
+	imaevm_params.hash_algo = imaevm_hash_algo_by_id(sig_hash_algo);
+
+	/*
+	 * Validate the signature based on the digest included in the
+	 * measurement list, not by calculating the local file digest.
+	 */
+	if (digestlen > 0)
+	    return verify_hash(file, digest, digestlen, sig + 1, siglen - 1);
+
+	evm_portable = true;
+	hashlen = calc_evm_hash(file, hash);
+	evm_portable = saved_evm_portable;
+	if (hashlen <= 1)
+		return hashlen;
+	assert(hashlen <= sizeof(hash));
+
+	return verify_hash(file, hash, hashlen, sig + 1, siglen - 1);
 }
 
 static int sign_evm(const char *file, const char *key)
@@ -1516,10 +1563,12 @@ void *ima_get_field(uint8_t **fieldp, uint32_t *field_len, int *total_len)
 
 void ima_ng_show(struct template_entry *entry)
 {
-	uint8_t *fieldp = entry->template;
+	uint8_t *fieldp = entry->template, *xattr_values, *uid, *gid, *mode;
 	uint32_t field_len;
 	int total_len = entry->template_len, digest_len, len, sig_len, fbuf_len;
 	uint8_t *digest, *sig = NULL, *fbuf = NULL;
+	uint8_t evm_digest[MAX_DIGEST_SIZE];
+	int evm_digest_len = 0;
 	char *algo, *path;
 	int found;
 	int err;
@@ -1531,11 +1580,96 @@ void ima_ng_show(struct template_entry *entry)
 
 	/* get path */
 	path = (char *)ima_get_field(&fieldp, &field_len, &total_len);;
-
-	if (!strcmp(entry->name, "ima-sig")) {
+	if (!strcmp(entry->name, "ima-sig") ||
+	    !strcmp(entry->name, "evm-sig")) {
 		/* get signature */
 		sig = (uint8_t *)ima_get_field(&fieldp, &field_len, &total_len);
 		sig_len = field_len;
+		if (!strcmp(entry->name, "evm-sig")) {
+			char *saved_xattr_values_str = xattr_values_str;
+			char *saved_uid_str = uid_str;
+			char *saved_gid_str = gid_str;
+			char *saved_mode_str = mode_str;
+			bool saved_evm_portable = evm_portable;
+			const char *saved_sig_hash_algo_str = imaevm_params.hash_algo;
+
+			/* skip xattr names */
+			ima_get_field(&fieldp, &field_len, &total_len);
+
+			/* skip xattr lengths */
+			ima_get_field(&fieldp, &field_len, &total_len);
+
+			/* get xattr values */
+			xattr_values = (uint8_t *)ima_get_field(&fieldp, &field_len, &total_len);
+			if (field_len) {
+				xattr_values_str = malloc(2 * field_len + 1);
+				if (xattr_values_str) {
+					bin2hex_str(xattr_values_str, xattr_values, field_len);
+					xattr_values_str[field_len * 2 ] = '\0';
+				}
+			}
+
+			/* get inode UID */
+			uid = (uint8_t *)ima_get_field(&fieldp, &field_len, &total_len);
+			if (field_len) {
+				uid_str = malloc(6);
+				if (uid_str) {
+					if (field_len == sizeof(uint16_t))
+						snprintf(uid_str, 6, "%d", *(uint16_t *)uid);
+					else
+						snprintf(uid_str, 6, "%d", *(uint32_t *)uid);
+				}
+			}
+
+			/* get inode GID */
+			gid = (uint8_t *)ima_get_field(&fieldp, &field_len, &total_len);
+			if (field_len) {
+				gid_str = malloc(6);
+				if (gid_str) {
+					if (field_len == sizeof(uint16_t))
+						snprintf(gid_str, 6, "%d", *(uint16_t *)gid);
+					else
+						snprintf(gid_str, 6, "%d", *(uint32_t *)gid);
+				}
+			}
+
+			/* get inode mode */
+			mode = (uint8_t *)ima_get_field(&fieldp, &field_len, &total_len);
+			if (field_len) {
+				mode_str = malloc(7);
+				if (mode_str)
+					snprintf(mode_str, 7, "%d", *(uint16_t *)mode);
+			}
+
+			if (sig && verify_list_sig) {
+				int sig_hash_algo = imaevm_hash_algo_from_sig(sig + 1);
+
+				if (sig_hash_algo < 0)
+					sig_hash_algo = HASH_ALGO_SHA1;
+
+				imaevm_params.hash_algo = imaevm_hash_algo_by_id(sig_hash_algo);
+
+				evm_portable = true;
+				err = calc_evm_hash(path, evm_digest);
+				evm_portable = saved_evm_portable;
+
+				imaevm_params.hash_algo = saved_sig_hash_algo_str;
+
+				if (err < 0)
+					memset(evm_digest, 0, sizeof(evm_digest));
+				else
+					evm_digest_len = err;
+			}
+
+			free(xattr_values_str);
+			xattr_values_str = saved_xattr_values_str;
+			free(uid_str);
+			uid_str = saved_uid_str;
+			free(gid_str);
+			gid_str = saved_gid_str;
+			free(mode_str);
+			mode_str = saved_mode_str;
+		}
 	} else if (!strcmp(entry->name, "ima-buf")) {
 		fbuf = (uint8_t *)ima_get_field(&fieldp, &field_len, &total_len);
 		fbuf_len = field_len;
@@ -1559,13 +1693,25 @@ void ima_ng_show(struct template_entry *entry)
 			log_info(" ");
 			log_dump(sig, sig_len);
 		}
-		if (verify_list_sig)
-			err = ima_verify_signature(path, sig, sig_len,
-						   digest, digest_len);
-		else
-			err = ima_verify_signature(path, sig, sig_len, NULL, 0);
-		if (!err && imaevm_params.verbose > LOG_INFO)
-			log_info("%s: verification is OK\n", path);
+		if (sig[0] == EVM_XATTR_PORTABLE_DIGSIG) {
+			if (verify_list_sig)
+				err = evm_verify_portable_signature(path, sig,
+					sig_len, evm_digest, evm_digest_len);
+			else
+				err = evm_verify_portable_signature(path, sig, sig_len,
+								    NULL, 0);
+			if (!err && imaevm_params.verbose > LOG_INFO)
+				log_info("%s: verification is OK\n", path);
+		} else {
+			if (verify_list_sig)
+				err = ima_verify_signature(path, sig, sig_len,
+							digest, digest_len);
+			else
+				err = ima_verify_signature(path, sig, sig_len,
+							   NULL, 0);
+			if (!err && imaevm_params.verbose > LOG_INFO)
+				log_info("%s: verification is OK\n", path);
+		}
 	} else {
 		if (imaevm_params.verbose > LOG_INFO)
 			log_info("\n");
