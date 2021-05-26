@@ -1497,6 +1497,23 @@ static int lookup_template_name_entry(char *template_name)
 	return 0;
 }
 
+void *ima_get_field(uint8_t **fieldp, uint32_t *field_len, int *total_len)
+{
+	void *ptr = NULL;
+
+	*field_len = *(uint32_t *)*fieldp;
+	*fieldp += sizeof(*field_len);
+	*total_len -= sizeof(*field_len);
+
+	if (*field_len) {
+		ptr = *fieldp;
+		*total_len -= *field_len;
+		*fieldp += *field_len;
+	}
+
+	return ptr;
+}
+
 void ima_ng_show(struct template_entry *entry)
 {
 	uint8_t *fieldp = entry->template;
@@ -1507,57 +1524,21 @@ void ima_ng_show(struct template_entry *entry)
 	int found;
 	int err;
 
-	/* get binary digest */
-	field_len = *(uint32_t *)fieldp;
-	fieldp += sizeof(field_len);
-	total_len -= sizeof(field_len);
-
-	algo = (char *)fieldp;
+	algo = (char *)ima_get_field(&fieldp, &field_len, &total_len);
 	len = strlen(algo) + 1;
 	digest_len = field_len - len;
-	digest = fieldp + len;
-
-	/* move to next field */
-	fieldp += field_len;
-	total_len -= field_len;
+	digest = (uint8_t *)algo + len;
 
 	/* get path */
-	field_len = *(uint32_t *)fieldp;
-	fieldp += sizeof(field_len);
-	total_len -= sizeof(field_len);
-
-	path = (char *)fieldp;
-
-	/* move to next field */
-	fieldp += field_len;
-	total_len -= field_len;
+	path = (char *)ima_get_field(&fieldp, &field_len, &total_len);;
 
 	if (!strcmp(entry->name, "ima-sig")) {
 		/* get signature */
-		field_len = *(uint32_t *)fieldp;
-		fieldp += sizeof(field_len);
-		total_len -= sizeof(field_len);
-
-		if (field_len) {
-			sig = fieldp;
-			sig_len = field_len;
-
-			/* move to next field */
-			fieldp += field_len;
-			total_len -= field_len;
-		}
+		sig = (uint8_t *)ima_get_field(&fieldp, &field_len, &total_len);
+		sig_len = field_len;
 	} else if (!strcmp(entry->name, "ima-buf")) {
-		field_len = *(uint32_t *)fieldp;
-		fieldp += sizeof(field_len);
-		total_len -= sizeof(field_len);
-		if (field_len) {
-			fbuf = fieldp;
-			fbuf_len = field_len;
-
-			/* move to next field */
-			fieldp += field_len;
-			total_len -= field_len;
-		}
+		fbuf = (uint8_t *)ima_get_field(&fieldp, &field_len, &total_len);
+		fbuf_len = field_len;
 	}
 
 	/* ascii_runtime_measurements */
