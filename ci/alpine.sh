@@ -43,7 +43,8 @@ apk add \
 	wget \
 	which \
 	xxd \
-	curl
+	curl \
+	haveged
 
 if [ ! "$TSS" ]; then
 	apk add git

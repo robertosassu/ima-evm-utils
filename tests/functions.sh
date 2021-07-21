@@ -272,3 +272,54 @@ _report_exit() {
   fi
 }
 
+# Syntax: _run_user_mode <UML binary> <init> <additional kernel parameters>
+_run_user_mode() {
+  if [ ! -f "$1" ]; then
+    return
+  fi
+
+  if [ $$ -eq 1 ]; then
+    return
+  fi
+
+  expect_pass $1 rootfstype=hostfs rw init=$2 quiet mem=256M $3
+}
+
+# Syntax: _exit_user_mode <UML binary>
+_exit_user_mode() {
+  if [ $$ -eq 1 ]; then
+    return
+  fi
+
+  if [ -f "$1" ]; then
+    exit $OK
+  fi
+}
+
+# Syntax: _init_user_mode
+_init_user_mode() {
+  if [ $$ -ne 1 ]; then
+    return
+  fi
+
+  mount -t proc proc /proc
+  mount -t sysfs sysfs /sys
+  mount -t securityfs securityfs /sys/kernel/security
+
+  if [ -n "$(which haveged 2> /dev/null)" ]; then
+    $(which haveged) -w 1024 &> /dev/null
+  fi
+
+  pushd $PWD > /dev/null
+}
+
+# Syntax: _cleanup_user_mode
+_cleanup_user_mode() {
+  if [ $$ -ne 1 ]; then
+    return
+  fi
+
+  umount /sys/kernel/security
+  umount /sys
+  umount /proc
+}

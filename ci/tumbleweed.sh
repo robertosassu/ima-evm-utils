@@ -41,7 +41,8 @@ zypper --non-interactive install --force-resolution --no-recommends \
 	wget \
 	which \
 	xsltproc \
-	curl
+	curl \
+	haveged
 
 if [ -f /usr/lib/ibmtss/tpm_server -a ! -e /usr/local/bin/tpm_server ]; then
 	ln -s /usr/lib/ibmtss/tpm_server /usr/local/bin
