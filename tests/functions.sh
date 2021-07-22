@@ -263,6 +263,10 @@ _report_exit() {
   [ $testsfail -gt 0 ] && echo -n "$RED" || echo -n "$NORM"
   echo " FAIL: $testsfail"
   echo "$NORM"
+  # Signal failure to UML caller with an unclean shutdown.
+  if [ $$ -eq 1 ] && [ "$(which poweroff)" ] && [ $testsfail -eq 0 ]; then
+    poweroff -f
+  fi
   if [ $testsfail -gt 0 ]; then
     exit "$FAIL"
   elif [ $testspass -gt 0 ]; then

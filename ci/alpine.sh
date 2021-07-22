@@ -44,7 +44,8 @@ apk add \
 	which \
 	xxd \
 	curl \
-	haveged
+	haveged \
+	openrc
 
 if [ ! "$TSS" ]; then
 	apk add git
