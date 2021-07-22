@@ -104,6 +104,11 @@ before_install:
         if [ -f "linux" ]; then
                 chmod +x linux
         fi
+    - curl -L $MOUNT_IDMAPPED_URL/mount-idmapped -s -f --output mount-idmapped || echo
+    - >
+        if [ -f "mount-idmapped" ]; then
+                chmod +x mount-idmapped
+        fi
     - $CONTAINER build $CONTAINER_ARGS -t ima-evm-utils .
 
 script:
