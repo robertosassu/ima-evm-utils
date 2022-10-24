@@ -43,7 +43,9 @@ zypper --non-interactive install --force-resolution --no-recommends \
 	wget \
 	which \
 	xsltproc \
-	curl
+	curl \
+	haveged \
+	systemd-sysvinit
 
 zypper --non-interactive install --force-resolution --no-recommends \
 	gnutls openssl-engine-libp11 softhsm || true

@@ -267,6 +267,10 @@ _report_exit_and_cleanup() {
   [ $testsfail -gt 0 ] && echo -n "$RED" || echo -n "$NORM"
   echo " FAIL: $testsfail"
   echo "$NORM"
+  # Signal failure to UML caller with an unclean shutdown.
+  if [ $$ -eq 1 ] && [ "$(which poweroff)" ] && [ $testsfail -eq 0 ]; then
+    poweroff -f
+  fi
   if [ $testsfail -gt 0 ]; then
     exit "$FAIL"
   elif [ $testspass -gt 0 ]; then
@@ -276,40 +280,54 @@ _report_exit_and_cleanup() {
   fi
 }
 
-# Setup SoftHSM for local testing by calling the softhsm_setup script.
-# Use the provided workdir as the directory where SoftHSM will store its state
-# into.
-# Upon successfully setting up SoftHSM, this function sets the global variables
-# OPENSSL_ENGINE and OPENSSL_KEYFORM so that the openssl command line tool can
-# use SoftHSM. Also the PKCS11_KEYURI global variable is set to the test key's
-# pkcs11 URI.
-_softhsm_setup() {
-  local workdir="$1"
+# Syntax: _run_user_mode <UML binary> <init> <additional kernel parameters>
+_run_user_mode() {
+  if [ ! -f "$1" ]; then
+    return
+  fi
 
-  local msg
+  if [ $$ -eq 1 ]; then
+    return
+  fi
 
-  export SOFTHSM_SETUP_CONFIGDIR="${workdir}/softhsm"
-  export SOFTHSM2_CONF="${workdir}/softhsm/softhsm2.conf"
+  expect_pass $1 rootfstype=hostfs rw init=$2 quiet mem=256M $3
+}
 
-  mkdir -p "${SOFTHSM_SETUP_CONFIGDIR}"
+# Syntax: _exit_user_mode <UML binary>
+_exit_user_mode() {
+  if [ $$ -eq 1 ]; then
+    return
+  fi
 
-  msg=$(./softhsm_setup setup 2>&1)
-  if [ $? -eq 0 ]; then
-    echo "softhsm_setup setup succeeded: $msg"
-    PKCS11_KEYURI=$(echo $msg | sed -n 's|^keyuri: \(.*\)|\1|p')
-
-    export EVMCTL_ENGINE="--engine pkcs11"
-    export OPENSSL_ENGINE="-engine pkcs11"
-    export OPENSSL_KEYFORM="-keyform engine"
-  else
-    echo "softhsm_setup setup failed: ${msg}"
+  if [ -f "$1" ]; then
+    exit $OK
   fi
 }
 
-# Tear down the SoftHSM setup and clean up the environment
-_softhsm_teardown() {
-  ./softhsm_setup teardown &>/dev/null
-  rm -rf "${SOFTHSM_SETUP_CONFIGDIR}"
-  unset SOFTHSM_SETUP_CONFIGDIR SOFTHSM2_CONF PKCS11_KEYURI \
-    EVMCTL_ENGINE OPENSSL_ENGINE OPENSSL_KEYFORM
+# Syntax: _init_user_mode
+_init_user_mode() {
+  if [ $$ -ne 1 ]; then
+    return
+  fi
+
+  mount -t proc proc /proc
+  mount -t sysfs sysfs /sys
+  mount -t securityfs securityfs /sys/kernel/security
+
+  if [ -n "$(which haveged 2> /dev/null)" ]; then
+    $(which haveged) -w 1024 &> /dev/null
+  fi
+
+  pushd $PWD > /dev/null
+}
+
+# Syntax: _cleanup_user_mode
+_cleanup_user_mode() {
+  if [ $$ -ne 1 ]; then
+    return
+  fi
+
+  umount /sys/kernel/security
+  umount /sys
+  umount /proc
 }
