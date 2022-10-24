@@ -41,7 +41,9 @@ yum -y install \
 	vim-common \
 	wget \
 	which \
-	curl
+	curl \
+	haveged \
+	systemd
 
 yum -y install docbook5-style-xsl || true
 yum -y install swtpm || true

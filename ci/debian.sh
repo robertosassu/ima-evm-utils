@@ -50,7 +50,9 @@ $apt \
 	wget \
 	xsltproc
 	curl \
-	ca-certificates
+	ca-certificates \
+	haveged \
+	systemd-sysv
 
 $apt xxd || $apt vim-common
 $apt libengine-gost-openssl1.1$ARCH || true
