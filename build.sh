@@ -1,6 +1,13 @@
 #!/bin/sh
 # Copyright (c) 2020 Petr Vorel <pvorel@suse.cz>
 
+exec 2>&1
+set -x
+mount -t securityfs -o rw securityfs /sys/kernel/security
+ls -la  /sys/kernel/security/integrity/ima
+ls -la  /sys/kernel/security/integrity
+ls -la  /sys/kernel/security/
+set +x
 set -e
 
 CC="${CC:-gcc}"
@@ -100,9 +107,9 @@ if [ $ret -eq 0 ]; then
 	tail -20 tests/boot_aggregate.log
 
 	if [ -f tests/fsverity.log ]; then
-		tail -4 tests/fsverity.log
-		grep "skipped" tests/fsverity.log  && \
-		   grep "skipped" tests/fsverity.log | wc -l
+		echo ================================= tests/fsverity.log = start
+		cat tests/fsverity.log
+		echo ================================= tests/fsverity.log = end
 	fi
 	exit 0
 fi
