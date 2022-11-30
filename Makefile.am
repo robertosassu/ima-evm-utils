@@ -1,4 +1,4 @@
-SUBDIRS = src tests
+SUBDIRS = src tests fsverity-utils
 if HAVE_PANDOC
 SUBDIRS += doc
 endif

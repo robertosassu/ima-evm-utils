@@ -1,0 +1,27 @@
+++ getconf _NPROCESSORS_ONLN
++ MAKE='make -j1'
++ log 'Build and test with statically linking'
+++ date
++ echo '[Mon Nov  8 11:10:17 CET 2021] Build and test with statically linking'
+[Mon Nov  8 11:10:17 CET 2021] Build and test with statically linking
++ grep libfsverity.so
++ ldd fsverity
++ ./fsverity --version
+fsverity v1.4
++ log 'Check that all global symbols are prefixed with "libfsverity_"'
+++ date
++ echo '[Mon Nov  8 11:10:17 CET 2021] Check that all global symbols are prefixed with "libfsverity_"'
+[Mon Nov  8 11:10:17 CET 2021] Check that all global symbols are prefixed with "libfsverity_"
++ grep ' T '
++ nm libfsverity.a
++ grep -v ' libfsverity_'
++ log 'Build and test with dynamic linking'
+++ date
++ echo '[Mon Nov  8 11:10:18 CET 2021] Build and test with dynamic linking'
+[Mon Nov  8 11:10:18 CET 2021] Build and test with dynamic linking
++ make -j1 CFLAGS=-Werror USE_SHARED_LIB=1 check
+  CC       programs/utils.o
+cc: fatal error: cannot execute 'cc1': execvp: No such file or directory
+compilation terminated.
+make: *** [Makefile:184: programs/utils.o] Error 1
++ rm -r /tmp/libfsverity_test.RTeqnPTm3
