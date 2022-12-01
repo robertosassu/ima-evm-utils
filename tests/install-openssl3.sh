@@ -18,7 +18,7 @@ if [ "$VARIANT" = "i386" ]; then
 	FLAGS="-m32 linux-generic32"
 fi
 
-./Configure $FLAGS no-engine no-dynamic-engine --prefix=/opt/openssl3 --openssldir=/opt/openssl3
+./Configure $FLAGS --prefix=/opt/openssl3 --openssldir=/opt/openssl3
 # Uncomment for debugging
 # perl configdata.pm --dump | grep engine
 make -j$(nproc)
