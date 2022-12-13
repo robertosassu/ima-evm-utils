@@ -267,6 +267,16 @@ _report_exit_and_cleanup() {
   [ $testsfail -gt 0 ] && echo -n "$RED" || echo -n "$NORM"
   echo " FAIL: $testsfail"
   echo "$NORM"
+  # Signal failure to UML caller with an unclean shutdown.
+  if [ -n "$UML_MODE" ] && [ "$UML_MODE" -eq 1 ] && [ $$ -eq 1 ]; then
+    if [ -z "$(which poweroff)" ]; then
+      echo "Warning: cannot properly shutdown system"
+    fi
+
+    if [ $testsfail -eq 0 ]; then
+      poweroff -f
+    fi
+  fi
   if [ $testsfail -gt 0 ]; then
     exit "$FAIL"
   elif [ $testspass -gt 0 ]; then
@@ -312,4 +322,71 @@ _softhsm_teardown() {
   rm -rf "${SOFTHSM_SETUP_CONFIGDIR}"
   unset SOFTHSM_SETUP_CONFIGDIR SOFTHSM2_CONF PKCS11_KEYURI \
     EVMCTL_ENGINE OPENSSL_ENGINE OPENSSL_KEYFORM
+}
+
+# Syntax: _run_user_mode <UML binary> <init> <additional kernel parameters>
+_run_user_mode() {
+  if [ -z "$UML_MODE" ] || [ "$UML_MODE" -ne 1 ]; then
+    return
+  fi
+
+  if [ $$ -eq 1 ]; then
+    return
+  fi
+
+  expect_pass $1 rootfstype=hostfs rw init=$2 quiet mem=256M $3
+}
+
+# Syntax: _exit_user_mode <UML binary>
+_exit_user_mode() {
+  if [ -z "$UML_MODE" ] || [ "$UML_MODE" -ne 1 ]; then
+    return
+  fi
+
+  if [ $$ -eq 1 ]; then
+    return
+  fi
+
+  if [ -f "$1" ]; then
+    exit $OK
+  fi
+}
+
+# Syntax: _init_user_mode
+_init_user_mode() {
+  if [ -z "$UML_MODE" ] || [ "$UML_MODE" -ne 1 ]; then
+    return
+  fi
+
+  if [ $$ -ne 1 ]; then
+    return
+  fi
+
+  mount -t proc proc /proc
+  mount -t sysfs sysfs /sys
+  mount -t securityfs securityfs /sys/kernel/security
+
+  if [ -n "$(which haveged 2> /dev/null)" ]; then
+    $(which haveged) -w 1024 &> /dev/null
+  fi
+
+  pushd $PWD > /dev/null
+}
+
+# Syntax: _cleanup_user_mode <cleanup function>
+_cleanup_user_mode() {
+  if [ -z "$UML_MODE" ] || [ "$UML_MODE" -ne 1 ]; then
+    $1
+    return
+  fi
+
+  if [ $$ -ne 1 ]; then
+    return
+  fi
+
+  $1
+
+  umount /sys/kernel/security
+  umount /sys
+  umount /proc
 }
