@@ -267,6 +267,16 @@ _report_exit_and_cleanup() {
   [ $testsfail -gt 0 ] && echo -n "$RED" || echo -n "$NORM"
   echo " FAIL: $testsfail"
   echo "$NORM"
+  # Signal failure to the testing environment creator with an unclean shutdown.
+  if [ -n "$TST_ENV" ] && [ $$ -eq 1 ]; then
+    if [ -z "$(command -v poweroff)" ]; then
+      echo "Warning: cannot properly shutdown system"
+    fi
+
+    if [ $testsfail -eq 0 ]; then
+      poweroff -f
+    fi
+  fi
   if [ $testsfail -gt 0 ]; then
     exit "$FAIL"
   elif [ $testspass -gt 0 ]; then
@@ -312,4 +322,78 @@ _softhsm_teardown() {
   rm -rf "${SOFTHSM_SETUP_CONFIGDIR}"
   unset SOFTHSM_SETUP_CONFIGDIR SOFTHSM2_CONF PKCS11_KEYURI \
     EVMCTL_ENGINE OPENSSL_ENGINE OPENSSL_KEYFORM
+}
+
+# Syntax: _run_env <kernel> <init> <additional kernel parameters>
+_run_env() {
+  if [ -z "$TST_ENV" ]; then
+    return
+  fi
+
+  if [ $$ -eq 1 ]; then
+    return
+  fi
+
+  if [ "$TST_ENV" = "um" ]; then
+    expect_pass "$1" rootfstype=hostfs rw init="$2" quiet mem=2048M "$3"
+  else
+    # Force failure.
+    testsfail+=1
+    echo $RED"Testing environment $TST_ENV not supported"$NORM
+    exit "$FAIL"
+  fi
+}
+
+# Syntax: _exit_env <kernel>
+_exit_env() {
+  if [ -z "$TST_ENV" ]; then
+    return
+  fi
+
+  if [ $$ -eq 1 ]; then
+    return
+  fi
+
+  exit "$OK"
+}
+
+# Syntax: _init_env
+_init_env() {
+  if [ -z "$TST_ENV" ]; then
+    return
+  fi
+
+  if [ $$ -ne 1 ]; then
+    return
+  fi
+
+  mount -t tmpfs tmpfs /tmp
+  mount -t proc proc /proc
+  mount -t sysfs sysfs /sys
+  mount -t securityfs securityfs /sys/kernel/security
+
+  if [ -n "$(command -v haveged 2> /dev/null)" ]; then
+    $(command -v haveged) -w 1024 &> /dev/null
+  fi
+
+  pushd "$PWD" > /dev/null || exit "$FAIL"
+}
+
+# Syntax: _cleanup_env <cleanup function>
+_cleanup_env() {
+  if [ -z "$TST_ENV" ]; then
+    $1
+    return
+  fi
+
+  if [ $$ -ne 1 ]; then
+    return
+  fi
+
+  $1
+
+  umount /sys/kernel/security
+  umount /sys
+  umount /proc
+  umount /tmp
 }
