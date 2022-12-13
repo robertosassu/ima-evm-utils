@@ -351,6 +351,36 @@ _softhsm_teardown() {
     EVMCTL_ENGINE OPENSSL_ENGINE OPENSSL_KEYFORM
 }
 
+_run_qemu() {
+  swtpm="$(command -v swtpm)"
+  if [ -n "$swtpm" ]; then
+    swtpm_dir="$(mktemp -d)"
+    ${swtpm} socket --tpmstate dir="$swtpm_dir" --tpm2 --ctrl type=unixio,path="$swtpm_dir"/swtpm-sock --flags not-need-init > /dev/null 2>&1 &
+    QEMU_SWTPM_PID=$!
+    if [ -n "$QEMU_SWTPM_PID" ]; then
+      QEMU_TPM_OPTS="-chardev socket,id=chrtpm,path=$swtpm_dir/swtpm-sock -tpmdev emulator,id=tpm0,chardev=chrtpm -device tpm-tis,tpmdev=tpm0"
+    fi
+  fi
+
+  if [ -z "$TST_ARCH" ]; then
+    TST_ARCH="$(uname -m)"
+  fi
+
+  if ! qemu-system-"$TST_ARCH" -kernel "$1" -m 2048 -smp "$(nproc)" \
+         -fsdev local,security_model=passthrough,multidevs=remap,id=fsdev-fsRoot,path=/ \
+         -device virtio-9p-pci,id=fsRoot,fsdev=fsdev-fsRoot,mount_tag=fsRoot \
+         -append "root=fsRoot rw rootfstype=9p rootflags=trans=virtio,version=9p2000.L,msize=5000000,cache=mmap,posixacl loglevel=0 init=$2 console=ttyS0 $3" \
+         -enable-kvm -display none -serial stdio $QEMU_TPM_OPTS; then
+    return "$FAIL"
+  fi
+
+  if [ -n "$SWTPM_PID" ]; then
+    kill -SIGTERM "$SWTPM_PID"
+  fi
+
+  rm -Rf "$swtpm_dir"
+}
+
 # Syntax: _run_env <kernel> <init> <additional kernel parameters>
 _run_env() {
   if [ -z "$TST_ENV" ]; then
@@ -363,6 +393,8 @@ _run_env() {
 
   if [ "$TST_ENV" = "um" ]; then
     expect_pass "$1" rootfstype=hostfs rw init="$2" quiet mem=2048M "$3"
+  elif [ "$TST_ENV" = "vm" ]; then
+    expect_pass _run_qemu "$@"
   else
     echo $RED"Testing environment $TST_ENV not supported"$NORM
     exit "$FAIL"
