@@ -49,7 +49,7 @@ _require dd mkfs blkid e2fsck tune2fs evmctl setfattr
 
 trap cleanup SIGINT SIGTERM EXIT
 
-cleanup() {
+_cleanup() {
         if [ -e $TST_MNT ]; then
 		if [ $LOOPBACK_MOUNTED -eq 1 ]; then
 			umount $TST_MNT
@@ -58,6 +58,11 @@ cleanup() {
 			rm "$TST_IMG"
 		fi
 	fi
+	_report_exit_and_cleanup
+}
+
+cleanup() {
+	_cleanup_env _cleanup
 	_report_exit_and_cleanup
 }
 
@@ -308,6 +313,15 @@ measure-ima() {
 
 	return "$error"
 }
+
+# Run in the new environment if TST_ENV is set.
+_run_env "$TST_KERNEL" "$PWD/$(basename "$0")" "TST_ENV=$TST_ENV TST_KERNEL=$TST_KERNEL PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH VERBOSE=$VERBOSE"
+
+# Exit from the creator of the new environment.
+_exit_env "$TST_KERNEL"
+
+# Mount filesystems in the new environment.
+_init_env
 
 # Dependency on being able to read and write the IMA policy file.
 # Requires both CONFIG_IMA_WRITE_POLICY, CONFIG_IMA_READ_POLICY be
