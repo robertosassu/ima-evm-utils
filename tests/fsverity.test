@@ -49,7 +49,7 @@ _require dd mkfs blkid e2fsck tune2fs evmctl setfattr
 
 trap cleanup SIGINT SIGTERM EXIT
 
-cleanup() {
+_cleanup() {
         if [ -e $TST_MNT ]; then
 		if [ $LOOPBACK_MOUNTED -eq 1 ]; then
 			umount $TST_MNT
@@ -58,6 +58,11 @@ cleanup() {
 			rm "$TST_IMG"
 		fi
 	fi
+	_report_exit_and_cleanup
+}
+
+cleanup() {
+	_cleanup_user_mode _cleanup
 	_report_exit_and_cleanup
 }
 
@@ -292,6 +297,15 @@ if [ -z "$FSVERITY" ]; then
 	echo "${CYAN}fsverity is not installed${NORM}"
 	exit "$SKIP"
 fi
+
+# Run in User Mode Linux.
+_run_user_mode ../linux $PWD/$(basename $0) "UML_MODE=$UML_MODE PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH VERBOSE=$VERBOSE"
+
+# Exit from the parent if UML was used.
+_exit_user_mode ../linux
+
+# Mount filesystems in UML environment.
+_init_user_mode
 
 if [ "x$(id -u)" != "x0" ]; then
 	echo "${CYAN}Must be root to execute this test${NORM}"
