@@ -50,7 +50,8 @@ yum -y install \
 	keyutils \
 	e2fsprogs \
 	acl \
-	libcap
+	libcap \
+	qemu-system-x86
 
 yum -y install docbook5-style-xsl || true
 yum -y install swtpm || true

@@ -369,8 +369,9 @@ _run_qemu() {
   if ! qemu-system-"$TST_ARCH" -kernel "$1" -m 2048 -smp "$(nproc)" \
          -fsdev local,security_model=passthrough,multidevs=remap,id=fsdev-fsRoot,path=/ \
          -device virtio-9p-pci,id=fsRoot,fsdev=fsdev-fsRoot,mount_tag=fsRoot \
+         -cpu qemu64 -machine accel=tcg \
          -append "root=fsRoot rw rootfstype=9p rootflags=trans=virtio,version=9p2000.L,msize=5000000,cache=mmap,posixacl loglevel=0 init=$2 console=ttyS0 $3" \
-         -enable-kvm -display none -serial stdio $QEMU_TPM_OPTS; then
+         -display none -serial stdio $QEMU_TPM_OPTS; then
     return "$FAIL"
   fi
 

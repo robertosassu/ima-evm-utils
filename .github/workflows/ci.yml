@@ -50,6 +50,11 @@ jobs:
           path: signing_key.pem
           key: signing_key.pem-${{ steps.last-commit.outputs.LINUX_SHA }}-${{ hashFiles('**/kernel-configs/*') }}
 
+      - name: Install libelf-dev
+        if: steps.cache-linux.outputs.cache-hit != 'true' || steps.cache-key.outputs.cache-hit != 'true'
+        shell: bash
+        run: sudo apt-get install libelf-dev
+
       - name: Compile UML kernel
         if: steps.cache-linux.outputs.cache-hit != 'true' || steps.cache-key.outputs.cache-hit != 'true'
         shell: bash
@@ -62,15 +67,13 @@ jobs:
           fi
           pushd linux-integrity
           git pull --depth 1 origin ${{ steps.last-commit.outputs.LINUX_SHA }}
-          make ARCH=um defconfig
+          make defconfig
           ./scripts/kconfig/merge_config.sh -m .config $(ls ../kernel-configs/*)
-          # Update manually, to specify ARCH=um
-          make ARCH=um olddefconfig
+          make olddefconfig
           # Make everything built-in
-          make ARCH=um localyesconfig
-          make ARCH=um $CROSS_COMPILE_OPT -j$(nproc)
-          chmod +x linux
-          cp linux ..
+          make localyesconfig
+          make $CROSS_COMPILE_OPT -j$(nproc)
+          cp arch/x86_64/boot/bzImage ../linux
           cp certs/signing_key.pem ..
           popd
 
@@ -151,7 +154,7 @@ jobs:
             env:
               CC: clang
               TSS: ibmtss
-              TST_ENV: um
+              TST_ENV: vm
               TST_KERNEL: ../linux
 
           - container: "centos:7"
