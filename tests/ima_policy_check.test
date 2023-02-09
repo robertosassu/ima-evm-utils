@@ -1,0 +1,314 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0
+#
+# Copyright (C) 2023 Roberto Sassu <roberto.sassu@huawei.com>
+#
+# Test for ima_policy_check.awk
+
+trap '_report_exit_and_cleanup' SIGINT SIGTERM EXIT
+
+cd "$(dirname "$0")" || exit 1
+. ./functions.sh
+
+export PATH=$PWD:$PATH
+
+# Base VERBOSE on the environment variable, if set.
+VERBOSE="${VERBOSE:-0}"
+
+check_interference() {
+	echo -e "\nTest: $1"
+	echo "New rule: $2"
+	echo "IMA policy: $3"
+
+	if [ "$TFAIL" != "yes" ]; then
+		echo -n "Result (expect no interference): "
+	else
+		echo -n "Result (expect interference): "
+	fi
+
+	if ! echo -e "$2\n$3" | ima_policy_check.awk; then
+		if [ "$TFAIL" != "yes" ]; then
+			echo "${RED}interference${NORM}"
+		else
+			echo "${GREEN}interference${NORM}"
+		fi
+		return "$FAIL"
+	fi
+
+	if [ "$TFAIL" != "yes" ]; then
+		echo "${GREEN}no interference${NORM}"
+	else
+		echo "${RED}no interference${NORM}"
+	fi
+	return "$OK"
+}
+
+# Basic check.
+desc="empty IMA policy"
+rule="measure func=FILE_CHECK"
+ima_policy=""
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+# Wrong new rule.
+desc="Wrong new rule"
+rule="measure fun=FILE_CHECK"
+ima_policy=""
+expect_fail check_interference "$desc" "$rule" "$ima_policy"
+
+# Unrelated/related actions.
+desc="unrelated actions measure/appraise"
+rule="measure func=FILE_CHECK"
+ima_policy="appraise func=FILE_CHECK"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+desc="unrelated actions appraise/measure"
+rule="appraise func=FILE_CHECK"
+ima_policy="measure func=FILE_CHECK"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+desc="unrelated actions appraise/dont_measure"
+rule="appraise func=FILE_CHECK"
+ima_policy="dont_measure func=FILE_CHECK"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+desc="related actions measure/dont_measure"
+rule="measure func=FILE_CHECK"
+ima_policy="dont_measure func=FILE_CHECK"
+expect_fail check_interference "$desc" "$rule" "$ima_policy"
+
+desc="related actions dont_measure/measure"
+rule="measure func=FILE_CHECK"
+ima_policy="dont_measure func=FILE_CHECK"
+expect_fail check_interference "$desc" "$rule" "$ima_policy"
+
+desc="related actions dont_appraise/appraise"
+rule="dont_appraise func=FILE_CHECK"
+ima_policy="appraise func=FILE_CHECK"
+expect_fail check_interference "$desc" "$rule" "$ima_policy"
+
+# Unrelated rules by different values for policy keywords.
+desc="same action, unrelated by func"
+rule="measure func=FILE_CHECK"
+ima_policy="measure func=MMAP_CHECK"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+desc="different action, unrelated by func"
+rule="measure func=FILE_CHECK"
+ima_policy="dont_measure func=MMAP_CHECK"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+desc="different action, unrelated by mask"
+rule="measure func=FILE_CHECK mask=MAY_EXEC"
+ima_policy="dont_measure func=FILE_CHECK mask=MAY_READ"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+desc="different action, unrelated by fowner"
+rule="measure func=FILE_CHECK fowner=1 mask=MAY_EXEC"
+ima_policy="dont_measure func=FILE_CHECK mask=MAY_EXEC fowner=0"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+# Unrelated rules with different policy options.
+desc="different action, unrelated by fowner, different policy options"
+rule="measure func=FILE_CHECK fowner=1 mask=MAY_EXEC"
+ima_policy="dont_measure func=FILE_CHECK mask=MAY_EXEC fowner=0 permit_directio"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+desc="same action, unrelated by fowner, different policy options"
+rule="measure func=FILE_CHECK fowner=1 mask=MAY_EXEC"
+ima_policy="measure func=FILE_CHECK mask=MAY_EXEC fowner=0 permit_directio"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+# Related rules by different policy keywords.
+desc="same action, add with uid, existing with func, no policy options"
+rule="measure uid=0"
+ima_policy="measure func=FILE_CHECK"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+desc="different action, add with uid, existing with func, no policy options"
+rule="measure uid=0"
+ima_policy="dont_measure func=FILE_CHECK"
+expect_fail check_interference "$desc" "$rule" "$ima_policy"
+
+desc="same action, add with uid, existing with func, different policy options"
+rule="measure uid=0 permit_directio"
+ima_policy="measure func=FILE_CHECK"
+expect_fail check_interference "$desc" "$rule" "$ima_policy"
+
+desc="same action, add with uid, existing with func, different policy options"
+rule="measure uid=0"
+ima_policy="measure func=FILE_CHECK permit_directio"
+expect_fail check_interference "$desc" "$rule" "$ima_policy"
+
+desc="same action, add with uid, existing with func, same policy options"
+rule="measure uid=0 permit_directio"
+ima_policy="measure func=FILE_CHECK permit_directio"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+# Related rules by same policy keywords and same value, with policy options.
+desc="same action, add with func, existing with func, same policy options"
+rule="measure func=FILE_CHECK permit_directio"
+ima_policy="measure func=FILE_CHECK permit_directio"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+desc="same action, add with func, existing with func, different policy options"
+rule="measure func=FILE_CHECK"
+ima_policy="measure func=FILE_CHECK permit_directio"
+expect_fail check_interference "$desc" "$rule" "$ima_policy"
+
+desc="same action, add with func, existing with func, same policy options"
+rule="measure func=FILE_CHECK permit_directio"
+ima_policy="measure func=FILE_CHECK"
+expect_fail check_interference "$desc" "$rule" "$ima_policy"
+
+desc="different action, add with func, existing with func, no policy options"
+rule="measure func=FILE_CHECK"
+ima_policy="dont_measure func=FILE_CHECK"
+expect_fail check_interference "$desc" "$rule" "$ima_policy"
+
+desc="different action, add with func, existing with func, no policy options"
+rule="dont_measure func=FILE_CHECK"
+ima_policy="measure func=FILE_CHECK"
+expect_fail check_interference "$desc" "$rule" "$ima_policy"
+
+desc="different action, add with func, existing with func, same policy options"
+rule="dont_measure func=FILE_CHECK permit_directio"
+ima_policy="measure func=FILE_CHECK permit_directio"
+expect_fail check_interference "$desc" "$rule" "$ima_policy"
+
+desc="different action, add with func, existing with func, same policy options"
+rule="measure func=FILE_CHECK permit_directio"
+ima_policy="dont_measure func=FILE_CHECK permit_directio"
+expect_fail check_interference "$desc" "$rule" "$ima_policy"
+
+# Related rules by same policy keywords and different value but with unsupported operator.
+desc="different action, add with func and uid, existing with func and different uid"
+rule="dont_measure func=FILE_CHECK uid=>0"
+ima_policy="measure func=FILE_CHECK uid=>1"
+expect_fail check_interference "$desc" "$rule" "$ima_policy"
+
+desc="same action, add with func and uid, existing with func and different uid"
+rule="measure func=FILE_CHECK uid=>0"
+ima_policy="measure func=FILE_CHECK uid=>1"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+desc="same action, add with func and uid, existing with func and different uid, different policy options"
+rule="measure func=FILE_CHECK uid=>0 permit_directio"
+ima_policy="measure func=FILE_CHECK uid=>1"
+expect_fail check_interference "$desc" "$rule" "$ima_policy"
+
+desc="same action, add with func and uid, existing with func and different uid, same policy options"
+rule="measure func=FILE_CHECK uid=>0 permit_directio"
+ima_policy="measure func=FILE_CHECK uid=>1 permit_directio"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+# Related rules by subset/superset policy keywords.
+desc="different action, add with func and uid, existing with func"
+rule="dont_measure func=FILE_CHECK uid=0"
+ima_policy="measure func=FILE_CHECK"
+expect_fail check_interference "$desc" "$rule" "$ima_policy"
+
+desc="same action, add with func and uid, existing with func"
+rule="measure func=FILE_CHECK uid=0"
+ima_policy="measure func=FILE_CHECK"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+desc="same action, add with func and uid, existing with func"
+rule="dont_measure func=FILE_CHECK uid=0"
+ima_policy="dont_measure func=FILE_CHECK"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+desc="same action, add with func and uid, existing with func, different policy options"
+rule="measure func=FILE_CHECK uid=0"
+ima_policy="measure func=FILE_CHECK permit_directio"
+expect_fail check_interference "$desc" "$rule" "$ima_policy"
+
+desc="same action, add with func and uid, existing with func, same policy options"
+rule="measure func=FILE_CHECK uid=0 permit_directio"
+ima_policy="measure func=FILE_CHECK permit_directio"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+desc="same action, add with func, existing with func and uid, same policy options (multiple)"
+rule="measure func=FILE_CHECK uid=0 permit_directio appraise_type=imasig"
+ima_policy="measure func=FILE_CHECK permit_directio appraise_type=imasig"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+desc="different action, add with func, existing with func and uid"
+rule="dont_measure func=FILE_CHECK"
+ima_policy="measure func=FILE_CHECK uid=0"
+expect_fail check_interference "$desc" "$rule" "$ima_policy"
+
+desc="same action, add with func, existing with func and uid"
+rule="measure func=FILE_CHECK"
+ima_policy="measure func=FILE_CHECK uid=0"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+desc="same action, add with func, existing with func and uid"
+rule="dont_measure func=FILE_CHECK"
+ima_policy="dont_measure func=FILE_CHECK uid=0"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+desc="same action, add with func and uid, existing with func, different policy options"
+rule="measure func=FILE_CHECK"
+ima_policy="measure func=FILE_CHECK uid=0 permit_directio"
+expect_fail check_interference "$desc" "$rule" "$ima_policy"
+
+desc="same action, add with func, existing with func and uid, same policy options"
+rule="measure func=FILE_CHECK permit_directio"
+ima_policy="measure func=FILE_CHECK uid=0 permit_directio"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+desc="same action, add with func, existing with func and uid, same policy options (multiple)"
+rule="measure func=FILE_CHECK permit_directio appraise_type=imasig"
+ima_policy="measure func=FILE_CHECK uid=0 permit_directio appraise_type=imasig"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+# Different policy options in a non-overlapping rule.
+desc="same action, add with func, existing with func and uid, no policy options"
+rule="measure func=FILE_CHECK uid=1"
+ima_policy="measure func=FILE_CHECK permit_directio uid=0"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+# Same policy option with different value in an overlapping rule.
+desc="same action, add with func, existing with func and uid, same policy option with different value"
+rule="measure func=FILE_CHECK permit_directio appraise_type=imasig"
+ima_policy="measure func=FILE_CHECK uid=0 permit_directio appraise_type=sigv3"
+expect_fail check_interference "$desc" "$rule" "$ima_policy"
+
+# Same policy option with different value in an non-overlapping rule.
+desc="same action, add with func and uid, existing with func and different uid, same policy option with different value"
+rule="measure func=FILE_CHECK uid=1 permit_directio appraise_type=imasig"
+ima_policy="measure func=FILE_CHECK uid=0 permit_directio appraise_type=sigv3"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+# Same policy option with different value in an non-overlapping rule, uid is the last.
+desc="same action, add with func and uid, existing with func and different uid, same policy option with different value"
+rule="measure func=FILE_CHECK permit_directio appraise_type=imasig uid=1"
+ima_policy="measure func=FILE_CHECK permit_directio appraise_type=sigv3 uid=0"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+# MMAP_CHECK and MMAP_CHECK_REQPROT hooks.
+desc="same action, MMAP_CHECK and MMAP_CHECK_REQPROT hooks"
+rule="measure func=MMAP_CHECK"
+ima_policy="measure func=MMAP_CHECK_REQPROT"
+expect_fail check_interference "$desc" "$rule" "$ima_policy"
+
+desc="same action, MMAP_CHECK and MMAP_CHECK_REQPROT hooks, overlapping rules and IMA policy more specific"
+rule="measure func=MMAP_CHECK"
+ima_policy="measure func=MMAP_CHECK_REQPROT uid=0"
+expect_fail check_interference "$desc" "$rule" "$ima_policy"
+
+desc="same action, MMAP_CHECK and MMAP_CHECK_REQPROT hooks, non-overlapping rules"
+rule="measure func=MMAP_CHECK uid=1"
+ima_policy="measure func=MMAP_CHECK_REQPROT uid=0"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+desc="same action, same hook MMAP_CHECK"
+rule="measure func=MMAP_CHECK"
+ima_policy="measure func=MMAP_CHECK"
+expect_pass check_interference "$desc" "$rule" "$ima_policy"
+
+# Hook aliases.
+desc="different action, FILE_CHECK hook and its alias"
+rule="measure func=FILE_CHECK"
+ima_policy="dont_measure func=PATH_CHECK"
+expect_fail check_interference "$desc" "$rule" "$ima_policy"
