@@ -41,16 +41,16 @@ jobs:
         uses: actions/cache@v3
         with:
           path: linux
-          key: linux-${{ steps.last-commit.outputs.LINUX_SHA }}-${{ hashFiles('**/kernel-configs/*') }}
+          key: linux-${{ steps.last-commit.outputs.LINUX_SHA }}-${{ hashFiles('**/kernel-*/*') }}
 
       - name: Cache signing key
         id: cache-key
         uses: actions/cache@v3
         with:
           path: signing_key.pem
-          key: signing_key.pem-${{ steps.last-commit.outputs.LINUX_SHA }}-${{ hashFiles('**/kernel-configs/*') }}
+          key: signing_key.pem-${{ steps.last-commit.outputs.LINUX_SHA }}-${{ hashFiles('**/kernel-*/*') }}
 
-      - name: Compile UML kernel
+      - name: Checkout UML kernel
         if: steps.cache-linux.outputs.cache-hit != 'true' || steps.cache-key.outputs.cache-hit != 'true'
         shell: bash
         run: |
@@ -62,6 +62,25 @@ jobs:
           fi
           pushd linux-integrity
           git pull --depth 1 origin ${{ steps.last-commit.outputs.LINUX_SHA }}
+          popd
+
+      - name: Apply off-tree patches to UML kernel
+        if: steps.cache-linux.outputs.cache-hit != 'true' || steps.cache-key.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          pushd linux-integrity
+          git config user.name "CI"
+          git config user.email "ci@localhost"
+          for patch_file in $(ls ../kernel-patches); do
+                git am ../kernel-patches/$patch_file
+          done
+          popd
+
+      - name: Compile UML kernel
+        if: steps.cache-linux.outputs.cache-hit != 'true' || steps.cache-key.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          pushd linux-integrity
           make ARCH=um defconfig
           ./scripts/kconfig/merge_config.sh -m .config $(ls ../kernel-configs/*)
           # Update manually, to specify ARCH=um
@@ -214,7 +233,7 @@ jobs:
       continue-on-error: false
       with:
         path: linux
-        key: linux-${{ needs.build.outputs.LINUX_SHA }}-${{ hashFiles('**/kernel-configs/*') }}
+        key: linux-${{ needs.build.outputs.LINUX_SHA }}-${{ hashFiles('**/kernel-*/*') }}
 
     - name: Retrieve signing key
       if: ${{ matrix.env.TST_ENV }}
@@ -222,7 +241,7 @@ jobs:
       uses: actions/cache@v3
       with:
         path: signing_key.pem
-        key: signing_key.pem-${{ needs.build.outputs.LINUX_SHA }}-${{ hashFiles('**/kernel-configs/*') }}
+        key: signing_key.pem-${{ needs.build.outputs.LINUX_SHA }}-${{ hashFiles('**/kernel-*/*') }}
 
     - name: Compiler version
       run: $CC --version
