@@ -1229,7 +1229,9 @@ static int calc_evm_hmac(const char *file, const char *keyfile, unsigned char *s
 		goto out;
 	}
 
-	if (S_ISREG(st.st_mode)) {
+	if (S_ISREG(st.st_mode) || S_ISDIR(st.st_mode)) {
+		/* we cannot at the momement to get generation of special files..
+		 * kernel API does not support it */
 		int fd = open(file, 0);
 
 		if (fd < 0) {
