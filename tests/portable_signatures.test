@@ -77,6 +77,8 @@ APPRAISE_FOWNER=2002
 APPRAISE_RULE="appraise fsuuid=$IMA_UUID fowner=$APPRAISE_FOWNER"
 METADATA_CHANGE_FOWNER=3001
 METADATA_CHANGE_FOWNER_2=3002
+MEASURE_EVM_SIG_FOWNER=2003
+MEASURE_EVM_SIG_RULE="measure fsuuid=$IMA_UUID fowner=$MEASURE_EVM_SIG_FOWNER template=evm-sig"
 
 check_load_ima_rule() {
 	local rule_loaded
@@ -320,6 +322,11 @@ check_tar_extract_xattrs_different_owner() {
 		return "$FAIL"
 	fi
 
+	if ! setcap cap_net_raw,cap_net_admin,cap_dac_override+eip in/test-file; then
+		echo "${RED}Cannot set fscaps for test-file${NORM}"
+		return "$FAIL"
+	fi
+
 	if ! evmctl sign -o -a sha256 --imahash --key "$key_path" in/test-file &> /dev/null; then
 		echo "${RED}Cannot sign test-file${NORM}"
 		return "$FAIL"
@@ -375,6 +382,11 @@ check_tar_extract_xattrs_same_owner() {
 
 	if ! echo "test" > in/test-file; then
 		echo "${RED}Cannot write test-file${NORM}"
+		return "$FAIL"
+	fi
+
+	if ! setcap cap_net_raw,cap_net_admin,cap_dac_override+eip in/test-file; then
+		echo "${RED}Cannot set fscaps for test-file${NORM}"
 		return "$FAIL"
 	fi
 
@@ -452,6 +464,11 @@ check_metadata_change() {
 		return "$FAIL"
 	fi
 
+	if ! setcap cap_net_raw,cap_net_admin,cap_dac_override+eip test-file; then
+		echo "${RED}Cannot set fscaps for test-file${NORM}"
+		return "$FAIL"
+	fi
+
 	if ! evmctl sign -o -a sha256 --imahash --key "$key_path" test-file &> /dev/null; then
 		echo "${RED}Cannot sign test-file${NORM}"
 		return "$FAIL"
@@ -462,6 +479,12 @@ check_metadata_change() {
 	# value is allowed.
 	if ! chown "$METADATA_CHANGE_FOWNER" test-file; then
 		echo "${RED}Cannot set same owner for test-file${NORM}"
+		return "$FAIL"
+	fi
+
+	# FIXME (chown removes fscaps)
+	if ! setcap cap_net_raw,cap_net_admin,cap_dac_override+eip test-file; then
+		echo "${RED}Cannot set fscaps for test-file${NORM}"
 		return "$FAIL"
 	fi
 
@@ -479,6 +502,17 @@ check_metadata_change() {
 
 	if chmod 2666 test-file 2> /dev/null; then
 		echo "${RED}Mode change for test-file should not be allowed (immutable metadata)${NORM}"
+		return "$FAIL"
+	fi
+
+	# Repeat the test for fscaps.
+	if ! setcap cap_net_raw,cap_net_admin,cap_dac_override+eip test-file; then
+		echo "${RED}Cannot set same fscaps for test-file${NORM}"
+		return "$FAIL"
+	fi
+
+	if setcap cap_net_admin,cap_dac_override+eip test-file 2> /dev/null; then
+		echo "${RED}Fscaps change for test-file should not be allowed (immutable metadata)${NORM}"
 		return "$FAIL"
 	fi
 
@@ -609,6 +643,11 @@ check_evm_revalidate() {
 		return "$FAIL"
 	fi
 
+	if ! setcap cap_net_raw,cap_net_admin,cap_dac_override+eip test-file; then
+		echo "${RED}Cannot set fscaps for test-file${NORM}"
+		return "$FAIL"
+	fi
+
 	# We need to defer setting the correct owner, as there could be
 	# already an IMA policy rule preventing evmctl from reading the
 	# file to calculate the digest.
@@ -619,6 +658,12 @@ check_evm_revalidate() {
 
 	if ! chown "$APPRAISE_FOWNER" test-file; then
 		echo "${RED}Cannot change owner of test-file${NORM}"
+		return "$FAIL"
+	fi
+
+	# FIXME (chown removes fscaps)
+	if ! setcap cap_net_raw,cap_net_admin,cap_dac_override+eip test-file; then
+		echo "${RED}Cannot set fscaps for test-file${NORM}"
 		return "$FAIL"
 	fi
 
@@ -652,6 +697,31 @@ check_evm_revalidate() {
 	# Restore metadata back to the original value.
 	if ! chmod 600 test-file; then
 		echo "${RED}Cannot restore original mode of test-file${NORM}"
+		return "$FAIL"
+	fi
+
+	# Ensure that now IMA appraisal succeeds.
+	if ! cat test-file > /dev/null; then
+		echo "${RED}Cannot read test-file after restoring correct mode${NORM}"
+		return "$FAIL"
+	fi
+
+	# Repeat the test for fscaps.
+	if ! setcap cap_net_admin,cap_dac_override+eip test-file; then
+		echo "${RED}Cannot change fscaps of test-file${NORM}"
+		return "$FAIL"
+	fi
+
+	# Here check if IMA re-appraised the file. The read should fail
+	# since now file metadata is invalid.
+	if cat test-file &> /dev/null; then
+		echo "${RED}Read of test-file should not succeed (invalid fscaps)${NORM}"
+		return "$FAIL"
+	fi
+
+	# Restore metadata back to the original value.
+	if ! setcap cap_net_raw,cap_net_admin,cap_dac_override+eip test-file; then
+		echo "${RED}Cannot set fscaps for test-file${NORM}"
 		return "$FAIL"
 	fi
 
@@ -816,6 +886,11 @@ check_evm_portable_sig_ima_appraisal() {
 		return "$FAIL"
 	fi
 
+	if ! setcap cap_net_raw,cap_net_admin,cap_dac_override+eip test-file; then
+		echo "${RED}Cannot set fscaps for test-file${NORM}"
+		return "$FAIL"
+	fi
+
 	# We need to defer setting the correct owner, as there could be
 	# already an IMA policy rule preventing evmctl from reading the
 	# file to calculate the digest.
@@ -826,6 +901,12 @@ check_evm_portable_sig_ima_appraisal() {
 
 	if ! chown "$APPRAISE_DIGSIG_FOWNER" test-file; then
 		echo "${RED}Cannot change owner of test-file${NORM}"
+		return "$FAIL"
+	fi
+
+	# FIXME (chown removes fscaps)
+	if ! setcap cap_net_raw,cap_net_admin,cap_dac_override+eip test-file; then
+		echo "${RED}Cannot set fscaps for test-file${NORM}"
 		return "$FAIL"
 	fi
 
@@ -865,6 +946,13 @@ check_evm_portable_sig_ima_appraisal() {
 	fi
 
 	# Check if xattrs have been correctly set.
+	xattr_orig=$(get_xattr security.capability test-file)
+	xattr=$(get_xattr security.capability out/test-file)
+	if [ "$xattr" != "$xattr_orig" ]; then
+		echo "${RED}security.capability mismatch between original and extracted file${NORM}"
+		return "$FAIL"
+	fi
+
 	xattr_orig=$(get_xattr security.selinux test-file)
 	xattr=$(get_xattr security.selinux out/test-file)
 	if [ "$xattr" != "$xattr_orig" ]; then
@@ -918,16 +1006,23 @@ check_evm_portable_sig_ima_measurement_list() {
 	local result
 	local evm_sig_fs
 	local evm_sig_list
+	local fowner=$1
+	local rule=$2
 
-	echo "Test: ${FUNCNAME[0]} (evm_value: $evm_value)"
+	echo "Test: ${FUNCNAME[0]} (evm_value: $evm_value, fowner: $fowner, rule: $rule)"
 
 	if ! echo "test" > test-file; then
 		echo "${RED}Cannot write test-file${NORM}"
 		return "$FAIL"
 	fi
 
-	if ! chown "$MEASURE_FOWNER" test-file; then
+	if ! chown "$fowner" test-file; then
 		echo "${RED}Cannot change owner of test-file${NORM}"
+		return "$FAIL"
+	fi
+
+	if ! setcap cap_net_raw,cap_net_admin,cap_dac_override+eip test-file; then
+		echo "${RED}Cannot set fscaps for test-file${NORM}"
 		return "$FAIL"
 	fi
 
@@ -936,7 +1031,7 @@ check_evm_portable_sig_ima_measurement_list() {
 		return "$FAIL"
 	fi
 
-	check_load_ima_rule "$MEASURE_RULE"
+	check_load_ima_rule "$rule"
 	result=$?
 	if [ "$result" -ne "$OK" ]; then
 		return "$result"
@@ -961,6 +1056,23 @@ check_evm_portable_sig_ima_measurement_list() {
 	evm_sig_list=$(awk '$6 == "'"$evm_sig_fs"'"' < /sys/kernel/security/ima/ascii_runtime_measurements)
 	if [ -z "$evm_sig_list" ]; then
 		echo "${RED}security.evm mismatch (xattr != measurement list)${NORM}"
+		return "$FAIL"
+	fi
+
+	if [ "$fowner" -eq "$MEASURE_FOWNER" ]; then
+		return "$OK"
+	fi
+
+	fscaps_fs=$(get_xattr security.capability test-file)
+	if [ -z "$fscaps_fs" ]; then
+		echo "${RED}security.capability not found${NORM}"
+		return "$FAIL"
+	fi
+
+	# Search security.evm in the measurement list.
+	fscaps_list=$(awk '$9 ~ /'"$fscaps_fs"'/' < /sys/kernel/security/ima/ascii_runtime_measurements)
+	if [ -z "$fscaps_list" ]; then
+		echo "${RED}security.capability mismatch (xattr != measurement list)${NORM}"
 		return "$FAIL"
 	fi
 
@@ -1115,5 +1227,7 @@ expect_pass check_evm_revalidate
 cleanup_evm_revalidate
 expect_pass check_evm_portable_sig_ima_appraisal
 cleanup_evm_portable_sig_ima_appraisal
-expect_pass check_evm_portable_sig_ima_measurement_list
+expect_pass check_evm_portable_sig_ima_measurement_list "$MEASURE_FOWNER" "$MEASURE_RULE"
+cleanup_evm_portable_sig_ima_measurement_list
+expect_pass check_evm_portable_sig_ima_measurement_list "$MEASURE_EVM_SIG_FOWNER" "$MEASURE_EVM_SIG_RULE"
 cleanup_evm_portable_sig_ima_measurement_list

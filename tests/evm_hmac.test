@@ -99,13 +99,24 @@ check_evm_hmac() {
 			echo "${RED}SELinux policy loading failed${NORM}"
 			return "$FAIL"
 		else
-			# Undo selinuxfs mount done by load_policy (sysfs cannot be mounted twice, procfs works but causes umount warning)
+			# Undo selinuxfs mount done by load_policy (sysfs cannot be mounted twice, procfs works but causes umount warning).
 			umount /sys/fs/selinux
 		fi
 	fi
 
 	if ! touch test-file; then
 		echo "${RED}Cannot create test-file${NORM}"
+		return "$FAIL"
+	fi
+
+	if ! setcap cap_net_raw,cap_net_admin,cap_dac_override+eip test-file; then
+		echo "${RED}Cannot set fscaps for test-file${NORM}"
+		return "$FAIL"
+	fi
+
+	# Test that HMACs are aligned even after removal of security.capability due to chown.
+	if ! chown 0 test-file; then
+		echo "${RED}Cannot change owner of test-file${NORM}"
 		return "$FAIL"
 	fi
 
