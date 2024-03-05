@@ -468,14 +468,14 @@ static int calc_evm_hash(const char *file, const char *hash_algo,
 		} else if (!strcmp(*xattrname, XATTR_NAME_CAPS) && (hmac_flags & HMAC_FLAG_CAPS_SET)) {
 			if (!caps_str)
 				continue;
-			err = strlen(caps_str);
+			err = strlen(caps_str) / 2;
 			if (err >= sizeof(xattr_value)) {
 				log_err("caps[%u] value is too long to fit into xattr[%zu]\n",
 					err + 1, sizeof(xattr_value));
 				err = -1;
 				goto out;
 			}
-			strcpy(xattr_value, caps_str);
+			hex2bin(xattr_value, caps_str, err);
 		} else {
 			err = lgetxattr(file, *xattrname, xattr_value, sizeof(xattr_value));
 			if (err < 0) {
