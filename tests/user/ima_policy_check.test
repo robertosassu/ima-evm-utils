@@ -8,9 +8,9 @@
 trap '_report_exit_and_cleanup' SIGINT SIGTERM EXIT
 
 cd "$(dirname "$0")" || exit 1
-. ./functions.sh
+. ../functions.sh
 
-export PATH=$PWD:$PATH
+export PATH=$PWD:$PWD/..:$PATH
 
 check_result() {
 	local result

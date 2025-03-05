@@ -87,6 +87,8 @@ AX_DEFAULT_HASH_ALGO([$KERNEL_HEADERS])
 AC_CONFIG_FILES([Makefile
 		src/Makefile
 		tests/Makefile
+		tests/kernel/Makefile
+		tests/user/Makefile
 		doc/Makefile
 		doc/sf/Makefile
 		packaging/ima-evm-utils.spec

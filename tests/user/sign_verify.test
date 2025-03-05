@@ -7,12 +7,12 @@
 #
 
 cd "$(dirname "$0")" || exit 1
-PATH=../src:$PATH
+PATH=../../src:$PATH
 
 # set the env SIGV1=1 to execute the signature v1 tests
 SIGV1=${SIGV1:-0}
 
-source ./functions.sh
+source ../functions.sh
 
 _require cmp evmctl getfattr openssl xxd
 
@@ -21,7 +21,7 @@ if cmp -b 2>&1 | grep -q "invalid option"; then
 	exit "$HARDFAIL"
 fi
 
-./gen-keys.sh >/dev/null 2>&1
+../gen-keys.sh
 
 trap _report_exit_and_cleanup EXIT
 WORKDIR=$(mktemp -d)

@@ -359,7 +359,7 @@ _softhsm_setup() {
 
   mkdir -p "${SOFTHSM_SETUP_CONFIGDIR}"
 
-  if msg=$(./softhsm_setup setup 2>&1); then
+  if msg=$(../softhsm_setup setup 2>&1); then
     echo "softhsm_setup setup succeeded: $msg"
     PKCS11_KEYURI=$(echo "$msg" | sed -n 's|^keyuri: \(.*\)|\1|p')
     export PKCS11_KEYURI
@@ -373,7 +373,7 @@ _softhsm_setup() {
 
 # Tear down the SoftHSM setup and clean up the environment
 _softhsm_teardown() {
-  ./softhsm_setup teardown &>/dev/null
+  ../softhsm_setup teardown &>/dev/null
   rm -rf "${SOFTHSM_SETUP_CONFIGDIR}"
   unset SOFTHSM_SETUP_CONFIGDIR SOFTHSM2_CONF PKCS11_KEYURI \
     EVMCTL_ENGINE OPENSSL_ENGINE OPENSSL_KEYFORM
