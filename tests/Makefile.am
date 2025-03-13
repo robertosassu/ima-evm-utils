@@ -1,11 +1,10 @@
 check_SCRIPTS =
 TESTS = $(check_SCRIPTS)
 
-check_SCRIPTS += ima_hash.test sign_verify.test boot_aggregate.test \
-		 fsverity.test portable_signatures.test ima_policy_check.test \
-		 mmap_check.test evm_hmac.test non_action_rule_flags.test
+SUBDIRS = kernel
 
-check_PROGRAMS := test_mmap
+check_SCRIPTS += ima_hash.test sign_verify.test boot_aggregate.test \
+		 ima_policy_check.test
 
 .PHONY: check_logs
 check_logs:
