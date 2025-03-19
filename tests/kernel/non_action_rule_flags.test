@@ -11,9 +11,7 @@ trap '_report_exit_and_cleanup _cleanup_env cleanup' SIGINT SIGTERM SIGSEGV EXIT
 VERBOSE="${VERBOSE:-0}"
 
 cd "$(dirname "$0")" || exit "$FAIL"
-export PATH=$PWD/../../src:$PATH
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH
-. ../functions.sh
+. ./functions_kernel.sh
 _require evmctl
 
 cleanup() {
@@ -48,30 +46,6 @@ cleanup() {
 IMA_UUID="28b23254-9467-44c0-b6ba-34b12e85a270"
 APPRAISE_RULE="appraise fsuuid=$IMA_UUID"
 
-check_load_ima_rule() {
-	local rule_loaded
-	local new_policy
-
-	rule_loaded=$(grep "$1" /sys/kernel/security/ima/policy)
-	if [ -z "$rule_loaded" ]; then
-		new_policy=$(mktemp -p "$g_mountpoint")
-		echo "$1" > "$new_policy"
-		if ! evmctl sign -o -a sha256 --imasig --key "$g_key_path" "$new_policy" &> /dev/null; then
-			echo "${RED}Failed to sign IMA policy${NORM}"
-			return "$FAIL"
-		fi
-
-		if ! echo "$new_policy" > /sys/kernel/security/ima/policy; then
-			rm -f "$new_policy"
-			echo "${RED}Failed to set IMA policy${NORM}"
-			return "$FAIL"
-		fi
-		rm -f "${new_policy}"
-	fi
-
-	return "$OK"
-}
-
 # The purpose of this test is to verify that IMA-Appraise retains the non-action
 # rule flags (e.g. IMA_NEW_FILE) and still allows access to a created file
 # before the last file close, and before security.ima is written to the disk.
@@ -81,7 +55,7 @@ check_ima_access_after_setattr() {
 
 	echo "Test: ${FUNCNAME[0]}"
 
-	check_load_ima_rule "$APPRAISE_RULE"
+	check_load_ima_rule "$APPRAISE_RULE" "$g_key_path"
 	result=$?
 	if [ $result -ne "$OK" ]; then
 		return $result
