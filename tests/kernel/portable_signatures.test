@@ -965,31 +965,6 @@ if [ "$(whoami)" != "root" ]; then
 	exit "$SKIP"
 fi
 
-if [ -n "$TST_KEY_PATH" ]; then
-	if [ "${TST_KEY_PATH:0:1}" != "/" ]; then
-		echo "${RED}Absolute path required for the signing key${NORM}"
-		exit "$FAIL"
-	fi
-
-	if [ ! -f "$TST_KEY_PATH" ]; then
-		echo "${RED}Kernel signing key not found in $TST_KEY_PATH${NORM}"
-		exit "$FAIL"
-	fi
-
-	g_key_path="$TST_KEY_PATH"
-elif [ -f "$PWD/../../signing_key.pem" ]; then
-	g_key_path="$PWD/../../signing_key.pem"
-elif [ -f "/lib/modules/$(uname -r)/source/certs/signing_key.pem" ]; then
-	g_key_path="/lib/modules/$(uname -r)/source/certs/signing_key.pem"
-elif [ -f "/lib/modules/$(uname -r)/build/certs/signing_key.pem" ]; then
-	g_key_path="/lib/modules/$(uname -r)/build/certs/signing_key.pem"
-else
-	echo "${CYAN}Kernel signing key not found${NORM}"
-	exit "$SKIP"
-fi
-
-g_key_path_der=$(mktemp)
-
 if [ ! -f "/sys/kernel/security/evm" ]; then
 	echo "${CYAN}EVM support in the kernel disabled${NORM}"
 	exit "$SKIP"
@@ -1002,11 +977,9 @@ fi
 
 evm_value=$(cat /sys/kernel/security/evm)
 
-openssl x509 -in "$g_key_path" -out "$g_key_path_der" -outform der
-if ! keyctl padd asymmetric pubkey %keyring:.ima < "$g_key_path_der" &> /dev/null; then
-	echo "${RED}Public key cannot be added to the IMA keyring${NORM}"
-	exit "$FAIL"
-fi
+g_key_path="$(get_private_key)"
+
+load_public_key "$g_key_path"
 
 if ! dd if=/dev/zero of="$g_image" bs=1M count=20 &> /dev/null; then
 	echo "${RED}Cannot create test image${NORM}"
