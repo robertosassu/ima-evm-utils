@@ -56,7 +56,7 @@ check_load_ima_rule() {
 	if [ -z "$rule_loaded" ]; then
 		new_policy=$(mktemp -p "$g_mountpoint")
 		echo "$1" > "$new_policy"
-		if ! evmctl sign -o -a sha256 --imasig --key "$key_path" "$new_policy" &> /dev/null; then
+		if ! evmctl sign -o -a sha256 --imasig --key "$g_key_path" "$new_policy" &> /dev/null; then
 			echo "${RED}Failed to sign IMA policy${NORM}"
 			return "$FAIL"
 		fi
@@ -146,15 +146,15 @@ if [ -n "$TST_KEY_PATH" ]; then
 		exit "$FAIL"
 	fi
 
-	key_path="$TST_KEY_PATH"
+	g_key_path="$TST_KEY_PATH"
 elif [ -f "$PWD/../signing_key.pem" ]; then
-	key_path="$PWD/../signing_key.pem"
+	g_key_path="$PWD/../signing_key.pem"
 elif [ -f "$PWD/../signing_key.der" ]; then
-	key_path="$PWD/../signing_key.der"
+	g_key_path="$PWD/../signing_key.der"
 elif [ -f "/lib/modules/$(uname -r)/source/certs/signing_key.pem" ]; then
-	key_path="/lib/modules/$(uname -r)/source/certs/signing_key.pem"
+	g_key_path="/lib/modules/$(uname -r)/source/certs/signing_key.pem"
 elif [ -f "/lib/modules/$(uname -r)/build/certs/signing_key.pem" ]; then
-	key_path="/lib/modules/$(uname -r)/build/certs/signing_key.pem"
+	g_key_path="/lib/modules/$(uname -r)/build/certs/signing_key.pem"
 else
 	echo "${CYAN}Kernel signing key not found${NORM}"
 	exit "$SKIP"
@@ -171,19 +171,19 @@ if [ -n "$TST_CERT_PATH" ]; then
 		exit "$FAIL"
 	fi
 
-	cert_path="$TST_CERT_PATH"
+	g_cert_path="$TST_CERT_PATH"
 else
-	cert_path=$key_path
+	g_cert_path=$g_key_path
 fi
 
 # We must always filter the cert, since the kernel rejects key+cert in DER form.
-cert_path_der=$(mktemp)
-openssl x509 -in "$cert_path" -out "$g_cert_path_der" -outform der
+g_cert_path_der=$(mktemp)
+openssl x509 -in "$g_cert_path" -out "$g_cert_path_der" -outform der
 
-if openssl pkey -inform der -in "$key_path" -text &> /dev/null; then
-	key_path_pem=$(mktemp)
-	openssl pkey -in "$key_path" -out "$g_key_path_pem" -outform pem
-	key_path=$g_key_path_pem
+if openssl pkey -inform der -in "$g_key_path" -text &> /dev/null; then
+	g_key_path_pem=$(mktemp)
+	openssl pkey -in "$g_key_path" -out "$g_key_path_pem" -outform pem
+	g_key_path=$g_key_path_pem
 fi
 
 if ! keyctl padd asymmetric pubkey %keyring:.ima < "$g_cert_path_der" &> /dev/null; then
